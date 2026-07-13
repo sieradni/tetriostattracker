@@ -1,49 +1,117 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Optional
 
-from ttr_tracker.database import Database, ReplayRow, StatsRow
+from ttr_tracker.database import Database, ReplayRow, StatsRow, PartialRunRow
+from ttr_tracker.survival import compute_likelihoods
 
 
 def get_summary(db: Database, gamemode: str = "blitz") -> dict:
-    total = db.count_replays(gamemode)
+    total = db.count_replays(gamemode) + db.count_partial_runs(gamemode)
     if total == 0:
         return {"total": 0, "recent_avg": {}, "pbs": {}}
 
-    with db.session() as sess:
-        recent = (
-            sess.query(StatsRow)
-            .join(ReplayRow, ReplayRow.id == StatsRow.replay_id)
-            .filter(ReplayRow.gamemode == gamemode)
-            .order_by(ReplayRow.timestamp.desc())
-            .limit(20)
-            .all()
-        )
+    entries = _combined_recent_entries(db, gamemode, 20)
+    avg = _compute_averages(entries)
 
-    avg = {}
-    if recent:
-        n = len(recent)
-        avg = {
-            "score": sum(r.score or 0 for r in recent) / n,
-            "lines": sum(r.lines or 0 for r in recent) / n,
-            "apm": sum(r.apm or 0 for r in recent) / n,
-            "pps": sum(r.pps or 0 for r in recent) / n,
-            "level": sum(r.level or 0 for r in recent) / n,
-            "tspins": sum(r.tspins or 0 for r in recent) / n,
-            "kpp": sum(r.kpp or 0 for r in recent) / n,
-            "kps": sum(r.kps or 0 for r in recent) / n,
-            "time": sum((r.final_time or 0) / 1000 for r in recent) / n,
-            "finesse_faults": sum(r.finesse_faults or 0 for r in recent) / n,
-            "perfect_pct": sum((r.finesse_perfect_pieces or 0) / max(r.pieces_placed or 1, 1) for r in recent) / n,
-        }
-
-    pbs = db.get_pbs(gamemode)
-    sessions = db.get_session_groups(gamemode)
+    pbs = _combined_pbs(db, gamemode)
+    sessions = _combined_session_groups(db, gamemode)
 
     return {
         "total": total,
         "recent_avg": avg,
         "pbs": pbs,
         "session_count": len(sessions),
+    }
+
+
+def _combined_recent_entries(db: Database, gamemode: str, limit: int) -> list[dict]:
+    with db.session() as sess:
+        replay_q = (
+            sess.query(ReplayRow, StatsRow)
+            .outerjoin(StatsRow, ReplayRow.id == StatsRow.replay_id)
+            .filter(ReplayRow.gamemode == gamemode)
+            .order_by(ReplayRow.timestamp.desc())
+            .limit(limit)
+            .all()
+        )
+        partial_q = (
+            sess.query(PartialRunRow)
+            .filter(PartialRunRow.gamemode == gamemode)
+            .order_by(PartialRunRow.timestamp.desc())
+            .limit(limit)
+            .all()
+        )
+
+    entries = []
+    for rp, st in replay_q:
+        entries.append({
+            "type": "replay",
+            "timestamp": rp.timestamp,
+            "score": st.score if st else 0,
+            "lines": st.lines if st else 0,
+            "apm": st.apm if st else 0.0,
+            "pps": st.pps if st else 0.0,
+            "kpp": st.kpp if st else 0.0,
+            "kps": st.kps if st else 0.0,
+            "level": st.level if st else 0,
+            "tspins": st.tspins if st else 0,
+            "finesse_faults": st.finesse_faults if st else 0,
+            "finesse_perfect_pieces": st.finesse_perfect_pieces if st else 0,
+            "pieces_placed": st.pieces_placed if st else 0,
+            "quads": st.quads if st else 0,
+            "all_clears": st.all_clears if st else 0,
+            "time": (st.final_time if st else 0) / 1000,
+            "final_time": st.final_time if st else 0,
+            "perfect_pct": (st.finesse_perfect_pieces / max(st.pieces_placed, 1)) if (st and st.pieces_placed) else 0,
+        })
+    for pr in partial_q:
+        entries.append({
+            "type": "partial",
+            "timestamp": pr.timestamp,
+            "score": pr.score,
+            "lines": None,
+            "apm": None,
+            "pps": pr.pps,
+            "kpp": pr.kpp,
+            "kps": pr.kps,
+            "level": None,
+            "tspins": None,
+            "finesse_faults": None,
+            "finesse_perfect_pieces": None,
+            "pieces_placed": pr.pieces_placed,
+            "quads": None,
+            "all_clears": pr.all_clears,
+            "time": pr.time_elapsed,
+            "final_time": pr.time_elapsed * 1000,
+            "perfect_pct": None,
+        })
+    entries.sort(key=lambda e: e["timestamp"], reverse=True)
+    return entries[:limit]
+
+
+def _compute_averages(entries: list[dict]) -> dict:
+    if not entries:
+        return {}
+    n = len(entries)
+
+    def _avg(key, skip_none=True):
+        vals = [e[key] for e in entries if not skip_none or e[key] is not None]
+        if not vals:
+            return 0.0
+        return sum(vals) / len(vals)
+
+    return {
+        "score": _avg("score"),
+        "lines": _avg("lines"),
+        "apm": _avg("apm"),
+        "pps": _avg("pps"),
+        "level": _avg("level"),
+        "tspins": _avg("tspins"),
+        "kpp": _avg("kpp"),
+        "kps": _avg("kps"),
+        "time": _avg("time"),
+        "finesse_faults": _avg("finesse_faults"),
+        "perfect_pct": _avg("perfect_pct"),
     }
 
 
@@ -61,28 +129,24 @@ def get_trends(db: Database, gamemode: str = "blitz") -> dict[str, list[tuple[st
         (ts, s / max(p, 1))
         for (ts, s), (_, p) in zip(result["score"], pieces_raw)
     ]
+
     return result
 
 
 def get_session_summaries(db: Database, gamemode: str = "blitz") -> list[dict]:
-    groups = db.get_session_groups(gamemode)
+    groups = _combined_session_groups(db, gamemode)
     summaries = []
     for group in groups:
-        ids = [r.id for r in group]
-        with db.session() as sess:
-            stats = (
-                sess.query(StatsRow)
-                .filter(StatsRow.replay_id.in_(ids))
-                .all()
-            )
-        start = group[0].timestamp
-        end = group[-1].timestamp
+        start = group[0]["timestamp"]
+        end = group[-1]["timestamp"]
         duration = (end - start).total_seconds() / 60
         count = len(group)
-        avg_score = sum(s.score or 0 for s in stats) / count if stats else 0
-        best_score = max((s.score or 0 for s in stats), default=0)
-        avg_time = sum((s.final_time or 0) / 1000 for s in stats) / count if stats else 0
-        best_time = min((s.final_time or 0) / 1000 for s in stats) if stats else 0
+        scores = [e["score"] for e in group if e["score"] is not None]
+        times = [e["time"] for e in group if e["time"] is not None]
+        avg_score = sum(scores) / len(scores) if scores else 0
+        best_score = max(scores) if scores else 0
+        avg_time = sum(times) / len(times) if times else 0
+        best_time = min(times) if times else 0
         summaries.append({
             "start": start.isoformat(),
             "end": end.isoformat(),
@@ -94,6 +158,79 @@ def get_session_summaries(db: Database, gamemode: str = "blitz") -> list[dict]:
             "best_time": round(best_time, 2),
         })
     return summaries
+
+
+def _combined_session_groups(db: Database, gamemode: str, gap_minutes: int = 60) -> list[list[dict]]:
+    entries = _combined_recent_entries(db, gamemode, 10000)
+    entries.sort(key=lambda e: e["timestamp"])
+    if not entries:
+        return []
+    groups: list[list[dict]] = [[entries[0]]]
+    for e in entries[1:]:
+        gap = (e["timestamp"] - groups[-1][-1]["timestamp"]).total_seconds() / 60
+        if gap > gap_minutes:
+            groups.append([])
+        groups[-1].append(e)
+    return groups
+
+
+def _combined_pbs(db: Database, gamemode: str) -> dict[str, tuple[float, str, datetime]]:
+    result = {}
+    _add_replay_pbs(db, gamemode, result)
+    _add_partial_pbs(db, gamemode, result)
+    return result
+
+
+def _add_replay_pbs(db: Database, gamemode: str, result: dict) -> None:
+    pb_columns = [
+        "score", "lines", "apm", "pps", "level", "top_combo", "top_btb",
+        "tspins", "quads", "all_clears", "finesse_perfect_pieces",
+        "kpp", "kps", "final_time",
+    ]
+    with db.session() as sess:
+        for col_name in pb_columns:
+            col = getattr(StatsRow, col_name, None)
+            if col is None:
+                continue
+            order = col.asc() if col_name == "final_time" else col.desc()
+            row = (
+                sess.query(col, ReplayRow.id, ReplayRow.timestamp)
+                .join(ReplayRow, ReplayRow.id == StatsRow.replay_id)
+                .filter(ReplayRow.gamemode == gamemode)
+                .order_by(order)
+                .first()
+            )
+            if row and row[0] is not None:
+                existing = result.get(col_name)
+                if col_name == "final_time":
+                    if existing is None or row[0] < existing[0]:
+                        result[col_name] = (float(row[0]), row[1], row[2])
+                else:
+                    if existing is None or row[0] > existing[0]:
+                        result[col_name] = (float(row[0]), row[1], row[2])
+
+
+def _add_partial_pbs(db: Database, gamemode: str, result: dict) -> None:
+    partials = db.get_all_partial_runs(gamemode=gamemode, limit=10000)
+    for pr in partials:
+        _check_pb(result, "score", float(pr.score), f"partial-{pr.id}", pr.timestamp, higher=True)
+        _check_pb(result, "pps", float(pr.pps), f"partial-{pr.id}", pr.timestamp, higher=True)
+        _check_pb(result, "kpp", float(pr.kpp), f"partial-{pr.id}", pr.timestamp, higher=True)
+        _check_pb(result, "kps", float(pr.kps), f"partial-{pr.id}", pr.timestamp, higher=True)
+        _check_pb(result, "all_clears", float(pr.all_clears), f"partial-{pr.id}", pr.timestamp, higher=True)
+        _check_pb(result, "pieces_placed", float(pr.pieces_placed), f"partial-{pr.id}", pr.timestamp, higher=True)
+        if pr.time_elapsed:
+            _check_pb(result, "final_time", pr.time_elapsed * 1000, f"partial-{pr.id}", pr.timestamp, higher=False)
+
+
+def _check_pb(result: dict, key: str, value: float, eid: str, ts: datetime, higher: bool) -> None:
+    existing = result.get(key)
+    if existing is None:
+        result[key] = (value, eid, ts)
+    elif higher and value > existing[0]:
+        result[key] = (value, eid, ts)
+    elif not higher and value < existing[0]:
+        result[key] = (value, eid, ts)
 
 
 def get_replay_detail(db: Database, replay_id: str) -> Optional[dict]:
@@ -150,6 +287,39 @@ def get_replay_detail(db: Database, replay_id: str) -> Optional[dict]:
             "gameover_reason": stats_row.gameover_reason,
         }
     return data
+
+
+def get_partial_run_detail(db: Database, run_id: int) -> Optional[dict]:
+    pr = db.get_partial_run(run_id)
+    if not pr:
+        return None
+    return {
+        "id": f"partial-{pr.id}",
+        "type": "partial",
+        "gamemode": pr.gamemode,
+        "timestamp": pr.timestamp.isoformat(),
+        "username": None,
+        "stats": {
+            "score": pr.score,
+            "pieces_placed": pr.pieces_placed,
+            "pps": pr.pps,
+            "inputs": pr.inputs,
+            "kpp": pr.kpp,
+            "kps": pr.kps,
+            "spp": pr.spp,
+            "all_clears": pr.all_clears,
+            "time_left": pr.time_left,
+            "final_time": pr.time_elapsed * 1000,
+            "gameover_reason": "misdrop",
+        },
+        "source_image": pr.source_image,
+        "notes": pr.notes,
+    }
+
+
+def get_blitz_survival(db: Database, gamemode: str = "blitz") -> dict:
+    full, partial = db.get_all_misdrop_data(gamemode)
+    return compute_likelihoods(full, partial)
 
 
 def get_match_leaderboard(db: Database, player_id: str) -> dict:

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Add Partial Run — Tetrio Stats Tracker</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f12; color: #e0e0e0; min-height: 100vh; }
+        nav { background: #1a1a22; padding: 0.75rem 1.5rem; display: flex; gap: 1.5rem; align-items: center; border-bottom: 1px solid #2a2a35; }
+        nav a { color: #a0a0b0; text-decoration: none; font-size: 0.9rem; font-weight: 500; padding: 0.3rem 0; border-bottom: 2px solid transparent; }
+        nav a:hover, nav a.active { color: #fff; border-bottom-color: #6c5ce7; }
+        nav .brand { color: #fff; font-weight: 700; font-size: 1.05rem; margin-right: auto; letter-spacing: 0.3px; }
+        nav select { background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45; border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.8rem; cursor: pointer; outline: none; }
+        nav select:hover { border-color: #6c5ce7; }
+        .container { max-width: 800px; margin: 0 auto; padding: 1.5rem; }
+        .card { background: #1a1a22; border: 1px solid #2a2a35; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
+        .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; color: #6c5ce7; margin-bottom: 0.75rem; }
+        label { display: block; font-size: 0.8rem; color: #888; margin-bottom: 0.25rem; }
+        input, textarea { width: 100%; padding: 0.5rem; background: #0f0f12; border: 1px solid #2a2a35; border-radius: 4px; color: #e0e0e0; font-size: 0.9rem; margin-bottom: 0.75rem; outline: none; }
+        input:focus, textarea:focus { border-color: #6c5ce7; }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+        button { background: #6c5ce7; color: #fff; border: none; border-radius: 4px; padding: 0.6rem 1.5rem; font-size: 0.9rem; cursor: pointer; font-weight: 600; }
+        button:hover { background: #5a4bd1; }
+        .error { color: #d63031; font-size: 0.8rem; margin-bottom: 0.5rem; }
+        .success { color: #00b894; font-size: 0.8rem; margin-bottom: 0.5rem; }
+        .hint { font-size: 0.7rem; color: #555; margin-top: -0.5rem; margin-bottom: 0.75rem; }
+        .ocr-coming { background: #2a2a3522; border: 1px dashed #3a3a45; border-radius: 4px; padding: 1rem; text-align: center; color: #555; font-size: 0.8rem; margin-bottom: 1rem; }
+        a { color: #6c5ce7; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">Tetrio Tracker</span>
+        <a href="/">Overview</a>
+        <a href="/trends">Trends</a>
+        <a href="/pbs">PBs</a>
+        <a href="/blitz">Blitz Stats</a>
+        <a href="/sessions">Sessions</a>
+        <a href="/replays">Replays</a>
+        <a href="/matches">Matches</a>
+    </nav>
+    <div class="container">
+        <h1 style="margin-bottom:1rem;font-size:1.3rem;">Add Partial Run</h1>
+        <p style="color:#888;font-size:0.85rem;margin-bottom:1rem;">
+            Enter stats from a screenshot taken immediately after a misdrop.
+            All blitz runs are assumed to be 120s. Fields marked <span style="color:#d63031;">*</span> are required.
+        </p>
+
+        <div class="ocr-coming">
+            Screenshot OCR upload coming soon. Manual entry only for now.
+        </div>
+
+        <div id="status"></div>
+
+        <form id="partialForm" onsubmit="return false;">
+            <div class="card">
+                <h2>Run Info</h2>
+                <label>Timestamp <span style="color:#d63031;">*</span></label>
+                <input type="datetime-local" id="runTimestamp" required>
+
+                <div class="form-row">
+                    <div>
+                        <label>Score <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="score" min="0" required>
+                    </div>
+                    <div>
+                        <label>Pieces Placed <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="pieces" min="0" required>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div>
+                        <label>PPS <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="pps" min="0" step="0.01" required>
+                    </div>
+                    <div>
+                        <label>Inputs <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="inputs" min="0" required>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div>
+                        <label>Inputs / Piece (KPP) <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="kpp" min="0" step="0.01" required>
+                    </div>
+                    <div>
+                        <label>Score / Piece (SPP) <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="spp" min="0" step="0.1" required>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div>
+                        <label>All Clears <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="allClears" min="0" required>
+                    </div>
+                    <div>
+                        <label>Time Left (seconds) <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="timeLeft" min="0" step="0.1" required>
+                        <div class="hint">Remaining time shown on screenshot (e.g. 45.2)</div>
+                    </div>
+                </div>
+
+                <label>Notes (optional)</label>
+                <textarea id="notes" rows="3" placeholder="Any additional context about this run..."></textarea>
+            </div>
+
+            <button onclick="submitPartialRun()">Save Partial Run</button>
+        </form>
+    </div>
+
+    <script>
+    async function submitPartialRun() {
+        const status = document.getElementById('status');
+        const form = document.getElementById('partialForm');
+        const data = new URLSearchParams();
+
+        const ts = document.getElementById('runTimestamp').value;
+        if (!ts) { status.innerHTML = '<div class="error">Timestamp is required</div>'; return; }
+        data.set('timestamp', new Date(ts).toISOString());
+        data.set('score', document.getElementById('score').value);
+        data.set('pieces', document.getElementById('pieces').value);
+        data.set('pps', document.getElementById('pps').value);
+        data.set('inputs', document.getElementById('inputs').value);
+        data.set('kpp', document.getElementById('kpp').value);
+        data.set('spp', document.getElementById('spp').value);
+        data.set('all_clears', document.getElementById('allClears').value);
+        data.set('time_left', document.getElementById('timeLeft').value);
+        data.set('notes', document.getElementById('notes').value || '');
+
+        status.innerHTML = '<div class="success">Saving...</div>';
+        try {
+            const r = await fetch('/api/partial-runs', { method: 'POST', body: data });
+            const result = await r.json();
+            if (result.status === 'ok') {
+                status.innerHTML = `<div class="success">Saved! <a href="/replays/partial-${result.id}">View run</a></div>`;
+                form.reset();
+                document.getElementById('runTimestamp').value = new Date().toISOString().slice(0, 16);
+            } else {
+                status.innerHTML = `<div class="error">Error: ${result.error || 'unknown'}</div>`;
+            }
+        } catch (e) {
+            status.innerHTML = `<div class="error">Error: ${e.message}</div>`;
+        }
+    }
+
+    document.getElementById('runTimestamp').value = new Date().toISOString().slice(0, 16);
+    </script>
+</body>
+</html>

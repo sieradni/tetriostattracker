@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Partial Run — Tetrio Stats Tracker</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f12; color: #e0e0e0; min-height: 100vh; }
+        nav { background: #1a1a22; padding: 0.75rem 1.5rem; display: flex; gap: 1.5rem; align-items: center; border-bottom: 1px solid #2a2a35; }
+        nav a { color: #a0a0b0; text-decoration: none; font-size: 0.9rem; font-weight: 500; padding: 0.3rem 0; border-bottom: 2px solid transparent; }
+        nav a:hover, nav a.active { color: #fff; border-bottom-color: #6c5ce7; }
+        nav .brand { color: #fff; font-weight: 700; font-size: 1.05rem; margin-right: auto; letter-spacing: 0.3px; }
+        nav select { background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45; border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.8rem; cursor: pointer; outline: none; }
+        nav select:hover { border-color: #6c5ce7; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+        .card { background: #1a1a22; border: 1px solid #2a2a35; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
+        .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; color: #6c5ce7; margin-bottom: 0.5rem; }
+        .grid { display: grid; gap: 1rem; }
+        .grid-3 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        td { padding: 0.4rem 0.5rem; border-bottom: 1px solid #222; }
+        .hero-stat { font-size: 2.2rem; font-weight: 700; color: #d63031; text-align: center; padding: 0.5rem 0; }
+        .hero-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; color: #888; text-align: center; }
+        a { color: #6c5ce7; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; }
+        .badge-partial { background: #d6303122; color: #d63031; border: 1px solid #d6303144; }
+        .na { color: #555; font-style: italic; }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">Tetrio Tracker</span>
+        <a href="/">Overview</a>
+        <a href="/trends">Trends</a>
+        <a href="/pbs">PBs</a>
+        <a href="/blitz">Blitz Stats</a>
+        <a href="/sessions">Sessions</a>
+        <a href="/replays">Replays</a>
+        <a href="/matches">Matches</a>
+        <span style="color:#555;font-size:0.8rem;margin-left:auto;">blitz</span>
+    </nav>
+    <div class="container" id="app"></div>
+    <script>
+    function fmt(secs) { const m = Math.floor(secs / 60); const s = (secs % 60).toFixed(2); return m > 0 ? `${m}:${s.padStart(5,'0')}` : `${s}s`; }
+    const d = /*{{PARTIAL_DATA}}*/;
+    const s = d.stats;
+
+    document.getElementById('app').innerHTML = `
+        <a href="/replays" style="color:#888;font-size:0.85rem;">&larr; Back to replays</a>
+        <h1 style="margin:0.75rem 0;font-size:1.3rem;">
+            Partial Run <span class="badge badge-partial">screenshot</span>
+            <span style="font-size:0.8rem;color:#888;font-weight:400;margin-left:0.5rem;">${new Date(d.timestamp).toLocaleString()}</span>
+        </h1>
+
+        <div class="card" style="text-align:center;border-color:#d6303144;">
+            <div class="hero-stat">${s.score.toLocaleString()}</div>
+            <div class="hero-label">Score at Misdrop</div>
+        </div>
+
+        <div class="grid grid-3">
+            <div class="card">
+                <h2>Available Stats</h2>
+                <table>
+                    <tr><td style="color:#888">Score</td><td style="font-weight:700">${s.score.toLocaleString()}</td></tr>
+                    <tr><td style="color:#888">Pieces</td><td>${s.pieces_placed}</td></tr>
+                    <tr><td style="color:#888">PPS</td><td>${s.pps.toFixed(2)}</td></tr>
+                    <tr><td style="color:#888">Inputs</td><td>${s.inputs}</td></tr>
+                    <tr><td style="color:#888">KPP</td><td>${s.kpp.toFixed(2)}</td></tr>
+                    <tr><td style="color:#888">KPS</td><td>${s.kps.toFixed(2)}</td></tr>
+                    <tr><td style="color:#888">Score/Piece</td><td>${s.spp.toFixed(1)}</td></tr>
+                    <tr><td style="color:#888">All Clears</td><td>${s.all_clears}</td></tr>
+                    <tr><td style="color:#888">Time Elapsed</td><td>${fmt(s.final_time / 1000)}</td></tr>
+                    <tr><td style="color:#888">Time Remaining</td><td>${s.time_left}s</td></tr>
+                </table>
+            </div>
+            <div class="card">
+                <h2>Unknown Stats</h2>
+                <table>
+                    <tr><td style="color:#888">Lines</td><td class="na">N/A</td></tr>
+                    <tr><td style="color:#888">Singles / Doubles / Triples / Quads</td><td class="na">N/A</td></tr>
+                    <tr><td style="color:#888">T-Spin Breakdown</td><td class="na">N/A</td></tr>
+                    <tr><td style="color:#888">Finesse Faults</td><td class="na">N/A</td></tr>
+                    <tr><td style="color:#888">Top Combo / BTB</td><td class="na">N/A</td></tr>
+                    <tr><td style="color:#888">Level</td><td class="na">N/A</td></tr>
+                    <tr><td style="color:#888">Game Over Reason</td><td style="color:#d63031">misdrop</td></tr>
+                </table>
+            </div>
+            <div class="card">
+                <h2>Notes</h2>
+                <p style="color:#aaa;font-size:0.85rem;">${d.notes || 'No notes.'}</p>
+            </div>
+        </div>
+    `;
+    </script>
+</body>
+</html>

@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Blitz Stats — Tetrio Stats Tracker</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f12; color: #e0e0e0; min-height: 100vh; }
+        nav { background: #1a1a22; padding: 0.75rem 1.5rem; display: flex; gap: 1.5rem; align-items: center; border-bottom: 1px solid #2a2a35; }
+        nav a { color: #a0a0b0; text-decoration: none; font-size: 0.9rem; font-weight: 500; padding: 0.3rem 0; border-bottom: 2px solid transparent; }
+        nav a:hover, nav a.active { color: #fff; border-bottom-color: #6c5ce7; }
+        nav .brand { color: #fff; font-weight: 700; font-size: 1.05rem; margin-right: auto; letter-spacing: 0.3px; }
+        nav select { background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45; border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.8rem; cursor: pointer; outline: none; }
+        nav select:hover { border-color: #6c5ce7; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+        .card { background: #1a1a22; border: 1px solid #2a2a35; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
+        .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; color: #6c5ce7; margin-bottom: 0.5rem; }
+        .grid-2 { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(500px, 1fr)); }
+        .grid-3 { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+        canvas { width: 100% !important; max-height: 300px; }
+        .chart-container { position: relative; width: 100%; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th { text-align: left; padding: 0.5rem; color: #888; font-weight: 600; border-bottom: 1px solid #2a2a35; }
+        td { padding: 0.5rem; border-bottom: 1px solid #222; }
+        .stat-value { font-size: 1.6rem; font-weight: 700; }
+        .stat-label { font-size: 0.75rem; color: #888; }
+        .legend-dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 0.3rem; }
+        a { color: #6c5ce7; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">Tetrio Tracker</span>
+        <a href="/">Overview</a>
+        <a href="/trends">Trends</a>
+        <a href="/pbs">PBs</a>
+        <a href="/blitz" class="active">Blitz Stats</a>
+        <a href="/sessions">Sessions</a>
+        <a href="/replays">Replays</a>
+        <a href="/matches">Matches</a>
+    </nav>
+    <div class="container">
+        <h1 style="margin-bottom:0.5rem;font-size:1.3rem;">Blitz Survival Analysis</h1>
+        <p style="color:#888;font-size:0.85rem;margin-bottom:1.5rem;">
+            Based on <span id="totalCount">0</span> games —
+            <span id="fullCount" style="color:#6c5ce7">0</span> completed,
+            <span id="partialCount" style="color:#d63031">0</span> misdrops.
+            <a href="/partial-runs" style="margin-left:1rem;">+ Add partial run from screenshot</a>
+        </p>
+
+        <div class="grid-3" id="summary-cards"></div>
+
+        <div class="grid-2">
+            <div class="card">
+                <h2>Survival by Pieces Placed</h2>
+                <p style="font-size:0.75rem;color:#555;margin-bottom:0.5rem;">
+                    Probability of reaching N pieces without misdropping
+                </p>
+                <div class="chart-container"><canvas id="piecesChart"></canvas></div>
+            </div>
+            <div class="card">
+                <h2>Survival by Time Elapsed</h2>
+                <p style="font-size:0.75rem;color:#555;margin-bottom:0.5rem;">
+                    Probability of reaching T seconds without misdropping
+                </p>
+                <div class="chart-container"><canvas id="timeChart"></canvas></div>
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <div class="card">
+                <h2>Survival by Score</h2>
+                <p style="font-size:0.75rem;color:#555;margin-bottom:0.5rem;">
+                    Probability of reaching score without misdropping
+                </p>
+                <div class="chart-container"><canvas id="scoreChart"></canvas></div>
+            </div>
+            <div class="card">
+                <h2>Percentiles</h2>
+                <p style="font-size:0.75rem;color:#555;margin-bottom:0.5rem;">
+                    Time/pieces/score at which X% of runs end in misdrop
+                </p>
+                <table>
+                    <thead>
+                        <tr><th>Percentile</th><th>Pieces</th><th>Time (s)</th><th>Score</th></tr>
+                    </thead>
+                    <tbody id="percentile-table"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    function fmt(secs) {
+        const m = Math.floor(secs / 60);
+        const s = (secs % 60).toFixed(1);
+        return m > 0 ? `${m}m${s}s` : `${s}s`;
+    }
+
+    const COLORS = { curve: '#6c5ce7', ci: 'rgba(108,92,231,0.15)', censored: '#00b894' };
+
+    function makeSurvivalChart(canvasId, curveData, label, xLabel, fmtFn) {
+        const canvas = document.getElementById(canvasId);
+        if (!curveData || curveData.length < 2) {
+            canvas.parentElement.innerHTML = '<p style="color:#555;text-align:center;padding:2rem;">Not enough data yet.</p>';
+            return;
+        }
+
+        const labels = curveData.map(d => d.time);
+        const survival = curveData.map(d => d.survival);
+        const ciUpper = curveData.map(d => Math.min(1, d.survival + 1.96 * d.std_err));
+        const ciLower = curveData.map(d => Math.max(0, d.survival - 1.96 * d.std_err));
+
+        new Chart(canvas, {
+            type: 'line',
+            data: {
+                labels: labels.map(fmtFn ? fmtFn : v => v),
+                datasets: [
+                    {
+                        label: '95% CI',
+                        data: ciUpper,
+                        borderColor: 'transparent',
+                        backgroundColor: COLORS.ci,
+                        pointRadius: 0,
+                        fill: '+1',
+                    },
+                    {
+                        label: label,
+                        data: survival,
+                        borderColor: COLORS.curve,
+                        backgroundColor: COLORS.curve + '22',
+                        fill: false,
+                        tension: 0,
+                        pointRadius: 2,
+                        pointBackgroundColor: COLORS.curve,
+                    },
+                ],
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                scales: {
+                    x: {
+                        title: { display: true, text: xLabel, color: '#888' },
+                        ticks: { color: '#888' },
+                        grid: { color: '#2a2a3522' },
+                    },
+                    y: {
+                        min: 0, max: 1.05,
+                        title: { display: true, text: 'Survival Probability', color: '#888' },
+                        ticks: { color: '#888', callback: v => (v * 100).toFixed(0) + '%' },
+                        grid: { color: '#2a2a3522' },
+                    },
+                },
+                plugins: {
+                    legend: { labels: { color: '#aaa', boxWidth: 12 } },
+                    tooltip: {
+                        callbacks: {
+                            label: ctx => {
+                                if (ctx.dataset.label === '95% CI') return null;
+                                return `Survival: ${(ctx.parsed.y * 100).toFixed(1)}%`;
+                            },
+                        },
+                    },
+                },
+            },
+        });
+    }
+
+    (async function() {
+        const r = await fetch('/api/blitz/survival?gamemode=blitz');
+        const data = await r.json();
+
+        const piecesCurve = data.pieces_curve || [];
+        const timeCurve = data.time_curve || [];
+        const scoreCurve = data.score_curve || [];
+
+        function countEvents(curve) {
+            return curve.filter(d => d.events > 0).length;
+        }
+        function countCensored(curve) {
+            const total = curve.reduce((s, d) => s + d.at_risk, 0);
+            const events = curve.reduce((s, d) => s + d.events, 0);
+            return total - events;
+        }
+
+        const total = (piecesCurve.length > 0 ? piecesCurve[0].at_risk : 0);
+        const partials = countEvents(piecesCurve);
+        const fulls = total - partials;
+
+        document.getElementById('totalCount').textContent = total;
+        document.getElementById('fullCount').textContent = fulls;
+        document.getElementById('partialCount').textContent = partials;
+
+        document.getElementById('summary-cards').innerHTML = `
+            <div class="card">
+                <div class="stat-value" style="color:#6c5ce7">${fulls}</div>
+                <div class="stat-label">Completed Runs (no misdrop)</div>
+            </div>
+            <div class="card">
+                <div class="stat-value" style="color:#d63031">${partials}</div>
+                <div class="stat-label">Misdrops Recorded</div>
+            </div>
+            <div class="card">
+                <div class="stat-value">${total}</div>
+                <div class="stat-label">Total Games</div>
+            </div>
+        `;
+
+        makeSurvivalChart('piecesChart', piecesCurve, 'Pieces', 'Pieces Placed');
+        makeSurvivalChart('timeChart', timeCurve, 'Time', 'Time Elapsed (s)', fmt);
+        makeSurvivalChart('scoreChart', scoreCurve, 'Score', 'Score');
+
+        const pcts = data.pieces_percentiles || [];
+        const timePcts = data.time_percentiles || [];
+        const scorePcts = data.score_percentiles || [];
+
+        const tbl = document.getElementById('percentile-table');
+        const labels = { 0.25: '25% (Q1)', 0.50: '50% (Median)', 0.75: '75%', 0.90: '90%' };
+        tbl.innerHTML = [0.25, 0.50, 0.75, 0.90].map(p => {
+            const pv = pcts.find(x => x.percentile === p) || {};
+            const tv = timePcts.find(x => x.percentile === p) || {};
+            const sv = scorePcts.find(x => x.percentile === p) || {};
+            return `<tr>
+                <td style="font-weight:600">${labels[p]}</td>
+                <td>${pv.time != null ? pv.time : '>max'}</td>
+                <td>${tv.time != null ? fmt(tv.time) : '>max'}</td>
+                <td>${sv.time != null ? sv.time.toLocaleString() : '>max'}</td>
+            </tr>`;
+        }).join('');
+    })();
+    </script>
+</body>
+</html>

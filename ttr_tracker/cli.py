@@ -24,6 +24,67 @@ def cli(ctx: click.Context, db: str) -> None:
     ctx.obj["db"] = Database(db)
 
 
+@cli.group()
+def partial():
+    """Manage partial runs (misdrop screenshots)."""
+
+
+@partial.command(name="add")
+@click.option("--timestamp", required=True, help="ISO timestamp")
+@click.option("--score", type=int, required=True)
+@click.option("--pieces", type=int, required=True)
+@click.option("--pps", type=float, required=True)
+@click.option("--inputs", type=int, required=True)
+@click.option("--kpp", type=float, required=True)
+@click.option("--spp", type=float, required=True)
+@click.option("--all-clears", type=int, required=True)
+@click.option("--time-left", type=float, required=True, help="Seconds remaining")
+@click.option("--notes", default=None)
+@click.pass_context
+def add_partial(ctx, timestamp, score, pieces, pps, inputs, kpp, spp, all_clears, time_left, notes):
+    db: Database = ctx.obj["db"]
+    from datetime import datetime
+    ts = datetime.fromisoformat(timestamp)
+    objective_ms = 120000
+    time_elapsed = max(0, objective_ms - time_left * 1000) / 1000
+    kps = inputs / time_elapsed if time_elapsed > 0 else 0.0
+    rid = db.insert_partial_run(
+        timestamp=ts, gamemode="blitz",
+        score=score, pieces_placed=pieces, pps=pps, inputs=inputs,
+        kpp=kpp, spp=spp, all_clears=all_clears,
+        time_left=time_left, time_elapsed=time_elapsed, kps=kps,
+        notes=notes,
+    )
+    click.echo(f"Added partial run #{rid}")
+
+
+@partial.command(name="list")
+@click.option("--limit", default=50)
+@click.pass_context
+def list_partial(ctx, limit):
+    db: Database = ctx.obj["db"]
+    rows = db.get_all_partial_runs(limit=limit)
+    if not rows:
+        click.echo("No partial runs.")
+        return
+    click.echo(f"{'ID':<5} {'Date':<22} {'Score':<10} {'Pieces':<8} {'PPS':<8} {'KPP':<8} {'KPS':<8} {'Time':<8}")
+    click.echo("-" * 85)
+    for r in rows:
+        ts = r.timestamp.strftime("%Y-%m-%d %H:%M")
+        click.echo(f"{r.id:<5} {ts:<22} {r.score:<10} {r.pieces_placed:<8} {r.pps:<8.2f} {r.kpp:<8.2f} {r.kps:<8.2f} {r.time_elapsed:<8.1f}")
+
+
+@partial.command(name="delete")
+@click.argument("run_id", type=int)
+@click.pass_context
+def delete_partial(ctx, run_id):
+    db: Database = ctx.obj["db"]
+    if db.delete_partial_run(run_id):
+        click.echo(f"Deleted partial run #{run_id}")
+    else:
+        click.echo(f"Partial run #{run_id} not found")
+
+
 @cli.command()
 @click.argument("path", type=click.Path(exists=True), default=str(DEFAULT_REPLAY_DIR))
 @click.pass_context
@@ -126,9 +187,9 @@ def serve(ctx: click.Context, port: int, host: str) -> None:
 @click.pass_context
 def export(ctx: click.Context, gamemode: str, output: str) -> None:
     db: Database = ctx.obj["db"]
-    rows = db.get_all_replays(gamemode=gamemode, limit=10000)
-    if not rows:
-        click.echo("No replays to export.")
+    entries = db.get_combined_entries(gamemode=gamemode, limit=10000)
+    if not entries:
+        click.echo("No data to export.")
         return
 
     import csv
@@ -143,13 +204,18 @@ def export(ctx: click.Context, gamemode: str, output: str) -> None:
 
     with open(output, "w", newline="") as f:
         writer = csv.writer(f)
-        writer.writerow(["id", "timestamp", "username", "gamemode"] + fields)
-        for replay, stats in rows:
-            s = {k: getattr(stats, k, 0) for k in fields} if stats else {k: 0 for k in fields}
+        writer.writerow(["id", "type", "timestamp", "username", "gamemode"] + fields)
+        for e in entries:
+            s = e["stats"]
+            row_vals = []
+            for k in fields:
+                v = s.get(k)
+                row_vals.append(v if v is not None else "")
             writer.writerow([
-                replay.id, replay.timestamp.isoformat(), replay.username, replay.gamemode,
-            ] + [s[k] for k in fields])
-    click.echo(f"Exported {len(rows)} replays to {output}")
+                e["id"], e["type"], e["timestamp"].isoformat() if hasattr(e["timestamp"], "isoformat") else e["timestamp"],
+                e.get("username") or "", e["gamemode"],
+            ] + row_vals)
+    click.echo(f"Exported {len(entries)} entries to {output}")
 
 
 if __name__ == "__main__":

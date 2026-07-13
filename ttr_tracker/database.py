@@ -123,6 +123,27 @@ class MatchRoundRow(Base):
     match = relationship("MatchRow", back_populates="rounds")
 
 
+class PartialRunRow(Base):
+    __tablename__ = "partial_runs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, nullable=False, index=True)
+    gamemode = Column(String, nullable=False, default="blitz")
+    score = Column(Integer, default=0)
+    pieces_placed = Column(Integer, default=0)
+    pps = Column(Float, default=0.0)
+    inputs = Column(Integer, default=0)
+    kpp = Column(Float, default=0.0)
+    spp = Column(Float, default=0.0)
+    all_clears = Column(Integer, default=0)
+    time_left = Column(Float, default=0.0)
+    time_elapsed = Column(Float, default=0.0)
+    kps = Column(Float, default=0.0)
+    source_image = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class OptionsRow(Base):
     __tablename__ = "replay_options"
 
@@ -420,3 +441,183 @@ class Database:
                 groups.append([])
             groups[-1].append(r)
         return groups
+
+    # ── Partial Run CRUD ──────────────────────────────────────────────────
+
+    def insert_partial_run(self, **kwargs) -> int:
+        with self.session() as sess:
+            row = PartialRunRow(**kwargs)
+            sess.add(row)
+            sess.commit()
+            return row.id
+
+    def get_all_partial_runs(
+        self, gamemode: Optional[str] = None, limit: int = 100, offset: int = 0
+    ) -> list[PartialRunRow]:
+        with self.session() as sess:
+            q = sess.query(PartialRunRow)
+            if gamemode:
+                q = q.filter(PartialRunRow.gamemode == gamemode)
+            q = q.order_by(PartialRunRow.timestamp.desc()).limit(limit).offset(offset)
+            return list(q.all())
+
+    def get_partial_run(self, run_id: int) -> Optional[PartialRunRow]:
+        with self.session() as sess:
+            return sess.query(PartialRunRow).filter_by(id=run_id).first()
+
+    def delete_partial_run(self, run_id: int) -> bool:
+        with self.session() as sess:
+            row = sess.query(PartialRunRow).filter_by(id=run_id).first()
+            if not row:
+                return False
+            sess.delete(row)
+            sess.commit()
+            return True
+
+    def update_partial_run(self, run_id: int, **kwargs) -> bool:
+        with self.session() as sess:
+            row = sess.query(PartialRunRow).filter_by(id=run_id).first()
+            if not row:
+                return False
+            for k, v in kwargs.items():
+                setattr(row, k, v)
+            sess.commit()
+            return True
+
+    def count_partial_runs(self, gamemode: Optional[str] = None) -> int:
+        with self.session() as sess:
+            q = sess.query(PartialRunRow)
+            if gamemode:
+                q = q.filter(PartialRunRow.gamemode == gamemode)
+            return q.count()
+
+    def get_combined_entries(
+        self, gamemode: Optional[str] = None, limit: int = 200
+    ) -> list[dict]:
+        """Return unified list of replay + partial-run entries sorted by timestamp desc."""
+        entries = []
+        with self.session() as sess:
+            replay_q = (
+                sess.query(ReplayRow, StatsRow)
+                .outerjoin(StatsRow, ReplayRow.id == StatsRow.replay_id)
+            )
+            if gamemode:
+                replay_q = replay_q.filter(ReplayRow.gamemode == gamemode)
+            for rp, st in replay_q.all():
+                entries.append({
+                    "id": rp.id,
+                    "type": "replay",
+                    "gamemode": rp.gamemode,
+                    "timestamp": rp.timestamp,
+                    "username": rp.username,
+                    "stats": {
+                        "score": st.score if st else None,
+                        "lines": st.lines if st else None,
+                        "level": st.level if st else None,
+                        "apm": st.apm if st else None,
+                        "pps": st.pps if st else None,
+                        "kpp": st.kpp if st else None,
+                        "kps": st.kps if st else None,
+                        "pieces_placed": st.pieces_placed if st else None,
+                        "inputs": st.inputs if st else None,
+                        "holds": st.holds if st else None,
+                        "top_combo": st.top_combo if st else None,
+                        "top_btb": st.top_btb if st else None,
+                        "tspins": st.tspins if st else None,
+                        "singles": st.singles if st else None,
+                        "doubles": st.doubles if st else None,
+                        "triples": st.triples if st else None,
+                        "quads": st.quads if st else None,
+                        "pentas": st.pentas if st else None,
+                        "tspin_singles": st.tspin_singles if st else None,
+                        "tspin_doubles": st.tspin_doubles if st else None,
+                        "tspin_triples": st.tspin_triples if st else None,
+                        "tspin_quads": st.tspin_quads if st else None,
+                        "all_clears": st.all_clears if st else None,
+                        "finesse_combo": st.finesse_combo if st else None,
+                        "finesse_faults": st.finesse_faults if st else None,
+                        "finesse_perfect_pieces": st.finesse_perfect_pieces if st else None,
+                        "garbage_sent": st.garbage_sent if st else None,
+                        "garbage_received": st.garbage_received if st else None,
+                        "final_time": st.final_time if st else None,
+                        "gameover_reason": st.gameover_reason if st else None,
+                        "spp": None,  # not stored for replays
+                        "time_left": None,
+                    },
+                })
+
+            partial_q = sess.query(PartialRunRow)
+            if gamemode:
+                partial_q = partial_q.filter(PartialRunRow.gamemode == gamemode)
+            for pr in partial_q.all():
+                entries.append({
+                    "id": f"partial-{pr.id}",
+                    "type": "partial",
+                    "gamemode": pr.gamemode,
+                    "timestamp": pr.timestamp,
+                    "username": None,
+                    "stats": {
+                        "score": pr.score,
+                        "lines": None,
+                        "level": None,
+                        "apm": None,
+                        "pps": pr.pps,
+                        "kpp": pr.kpp,
+                        "kps": pr.kps,
+                        "pieces_placed": pr.pieces_placed,
+                        "inputs": pr.inputs,
+                        "holds": None,
+                        "top_combo": None,
+                        "top_btb": None,
+                        "tspins": None,
+                        "singles": None,
+                        "doubles": None,
+                        "triples": None,
+                        "quads": None,
+                        "pentas": None,
+                        "tspin_singles": None,
+                        "tspin_doubles": None,
+                        "tspin_triples": None,
+                        "tspin_quads": None,
+                        "all_clears": pr.all_clears,
+                        "finesse_combo": None,
+                        "finesse_faults": None,
+                        "finesse_perfect_pieces": None,
+                        "garbage_sent": None,
+                        "garbage_received": None,
+                        "final_time": pr.time_elapsed * 1000 if pr.time_elapsed else None,
+                        "gameover_reason": "misdrop",
+                        "spp": pr.spp,
+                        "time_left": pr.time_left,
+                    },
+                })
+
+        entries.sort(key=lambda e: e["timestamp"], reverse=True)
+        return entries[:limit]
+
+    def get_all_misdrop_data(self, gamemode: str = "blitz") -> tuple[list[dict], list[dict]]:
+        """Return (full_replays, partial_runs) for survival analysis."""
+        full: list[dict] = []
+        partial: list[dict] = []
+        with self.session() as sess:
+            replay_q = (
+                sess.query(StatsRow, ReplayRow)
+                .join(ReplayRow, ReplayRow.id == StatsRow.replay_id)
+                .filter(ReplayRow.gamemode == gamemode)
+                .all()
+            )
+            for st, rp in replay_q:
+                full.append({
+                    "score": st.score or 0,
+                    "pieces": st.pieces_placed or 0,
+                    "time": (st.final_time or 0) / 1000,
+                    "timestamp": rp.timestamp,
+                })
+            for pr in sess.query(PartialRunRow).filter(PartialRunRow.gamemode == gamemode).all():
+                partial.append({
+                    "score": pr.score,
+                    "pieces": pr.pieces_placed,
+                    "time": pr.time_elapsed,
+                    "timestamp": pr.timestamp,
+                })
+        return full, partial
