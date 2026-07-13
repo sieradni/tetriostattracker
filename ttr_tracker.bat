@@ -1,0 +1,1 @@
+python -m ttr_tracker.cli serve

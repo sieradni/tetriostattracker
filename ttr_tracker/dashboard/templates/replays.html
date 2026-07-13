@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Replays — Tetrio Stats Tracker</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f12; color: #e0e0e0; min-height: 100vh; }
+        nav { background: #1a1a22; padding: 0.75rem 1.5rem; display: flex; gap: 1.5rem; align-items: center; border-bottom: 1px solid #2a2a35; }
+        nav a { color: #a0a0b0; text-decoration: none; font-size: 0.9rem; font-weight: 500; padding: 0.3rem 0; border-bottom: 2px solid transparent; }
+        nav a:hover, nav a.active { color: #fff; border-bottom-color: #6c5ce7; }
+        nav .brand { color: #fff; font-weight: 700; font-size: 1.05rem; margin-right: auto; letter-spacing: 0.3px; }
+        nav select { background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45; border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.8rem; cursor: pointer; outline: none; }
+        nav select:hover { border-color: #6c5ce7; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+        .card { background: #1a1a22; border: 1px solid #2a2a35; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
+        .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; background: #2a2a35; color: #aaa; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th { text-align: left; padding: 0.6rem 0.5rem; color: #888; font-weight: 600; border-bottom: 1px solid #2a2a35; }
+        td { padding: 0.5rem; border-bottom: 1px solid #222; }
+        tr:hover td { background: #22222c; }
+        tr { cursor: pointer; }
+        .drop-zone { border: 2px dashed #2a2a35; border-radius: 8px; padding: 2.5rem 1.5rem; text-align: center; cursor: pointer; transition: 0.15s; margin-bottom: 1rem; }
+        .drop-zone:hover, .drop-zone.drag-over { border-color: #6c5ce7; background: #1a1a22; }
+        .drop-zone.drag-over { border-color: #00b894; }
+        .drop-zone input { display: none; }
+        .drop-zone .icon { font-size: 2rem; color: #6c5ce7; margin-bottom: 0.5rem; }
+        .drop-zone p { color: #888; font-size: 0.9rem; }
+        .drop-zone .hint { color: #555; font-size: 0.75rem; margin-top: 0.3rem; }
+        #results { margin-bottom: 1rem; display: none; }
+        .result-item { padding: 0.5rem 0.75rem; border-radius: 4px; font-size: 0.8rem; margin-bottom: 0.25rem; }
+        .result-item.ok { background: #00b89422; color: #00b894; border: 1px solid #00b89444; }
+        .result-item.skipped { background: #fdcb6e22; color: #fdcb6e; border: 1px solid #fdcb6e44; }
+        .result-item.error { background: #d6303122; color: #d63031; border: 1px solid #d6303144; }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">Tetrio Tracker</span>
+        <a href="/">Overview</a>
+        <a href="/trends">Trends</a>
+        <a href="/pbs">PBs</a>
+        <a href="/sessions">Sessions</a>
+        <a href="/replays" class="active">Replays</a>
+        <a href="/matches">Matches</a>
+        <select id="gmSelect"></select>
+    </nav>
+    <div class="container">
+        <h1 style="margin-bottom:1rem;font-size:1.3rem;">Replays</h1>
+
+        <div class="drop-zone" id="dropZone">
+            <div class="icon">&#8679;</div>
+            <p>Drop .ttr files here or click to browse</p>
+            <div class="hint">Supports multiple files</div>
+            <input type="file" id="fileInput" multiple accept=".ttr">
+        </div>
+        <div id="results"></div>
+
+        <div class="card" style="padding:0;">
+            <table>
+                <thead>
+                    <tr id="table-headers"></tr>
+                </thead>
+                <tbody id="replay-table"></tbody>
+            </table>
+        </div>
+    </div>
+
+<script>
+async function initGM() {
+    const sel = document.getElementById('gmSelect');
+    const modes = await fetch('/api/gamemodes').then(r => r.json());
+    const current = localStorage.getItem('tetrio_gm') || modes[0] || 'blitz';
+    sel.innerHTML = modes.map(g => `<option value="${g}"${g===current?' selected':''}>${g === '40l' ? '40L' : g.charAt(0).toUpperCase()+g.slice(1)}</option>`).join('');
+    sel.addEventListener('change', function() { localStorage.setItem('tetrio_gm', this.value); location.reload(); });
+}
+function gm() { return localStorage.getItem('tetrio_gm') || 'blitz'; }
+function fmt(secs) { const m = Math.floor(secs / 60); const s = (secs % 60).toFixed(1); return m > 0 ? `${m}m${s}s` : `${s}s`; }
+
+async function loadReplays() {
+    const gamemode = gm();
+    const r = await fetch('/api/replays?limit=200');
+    const allReplays = await r.json();
+
+    const is40l = gamemode === '40l';
+    const headers = is40l
+        ? ['Date', 'Mode', 'Time', 'PPS', 'KPS', 'KPP', 'Score', 'Faults', 'Perfect%']
+        : ['Date', 'Mode', 'Score', 'Lines', 'APM', 'PPS', 'KPP', 'KPS', 'Quads', 'ACs', 'S/P'];
+
+    document.getElementById('table-headers').innerHTML = headers.map(h => `<th>${h}</th>`).join('');
+
+    const tbody = document.getElementById('replay-table');
+    const filtered = gamemode
+        ? allReplays.filter(rp => rp.gamemode === gamemode)
+        : allReplays;
+
+    tbody.innerHTML = filtered.map(rp => {
+        const s = rp.stats;
+        if (is40l) {
+            const time = (s.final_time || 0) / 1000;
+            const pct = s.pieces_placed ? ((s.finesse_perfect_pieces || 0) / s.pieces_placed * 100).toFixed(0) : '—';
+            return `<tr onclick="window.location='/replays/${rp.id}'">
+                <td>${new Date(rp.timestamp).toLocaleString()}</td>
+                <td><span class="badge">${rp.gamemode}</span></td>
+                <td style="font-weight:700;color:#00b894">${fmt(time)}</td>
+                <td>${(s.pps || 0).toFixed(2)}</td>
+                <td>${(s.kps || 0).toFixed(2)}</td>
+                <td>${(s.kpp || 0).toFixed(2)}</td>
+                <td>${(s.score || 0).toLocaleString()}</td>
+                <td>${s.finesse_faults || 0}</td>
+                <td>${pct}%</td>
+            </tr>`;
+        } else {
+            const spp = s.pieces_placed ? (s.score / s.pieces_placed).toFixed(1) : '—';
+            return `<tr onclick="window.location='/replays/${rp.id}'">
+                <td>${new Date(rp.timestamp).toLocaleString()}</td>
+                <td><span class="badge">${rp.gamemode}</span></td>
+                <td>${(s.score || 0).toLocaleString()}</td>
+                <td>${s.lines || 0}</td>
+                <td>${(s.apm || 0).toFixed(1)}</td>
+                <td>${(s.pps || 0).toFixed(2)}</td>
+                <td>${(s.kpp || 0).toFixed(2)}</td>
+                <td>${(s.kps || 0).toFixed(2)}</td>
+                <td>${s.quads || 0}</td>
+                <td>${s.all_clears || 0}</td>
+                <td>${spp}</td>
+            </tr>`;
+        }
+    }).join('');
+}
+
+async function uploadFiles(files) {
+    const resultsDiv = document.getElementById('results');
+    resultsDiv.style.display = 'block';
+    resultsDiv.innerHTML = '<div class="result-item" style="color:#888">Uploading...</div>';
+    const formData = new FormData();
+    for (const file of files) formData.append('files', file);
+    try {
+        const r = await fetch('/api/import', { method: 'POST', body: formData });
+        const results = await r.json();
+        resultsDiv.innerHTML = results.map(res => `<div class="result-item ${res.status}">${res.file} — ${res.message}</div>`).join('');
+        loadReplays();
+    } catch (e) {
+        resultsDiv.innerHTML = `<div class="result-item error">Upload failed: ${e.message}</div>`;
+    }
+}
+
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag-over'); if (e.dataTransfer.files.length) uploadFiles(e.dataTransfer.files); });
+fileInput.addEventListener('change', () => { if (fileInput.files.length) uploadFiles(fileInput.files); fileInput.value = ''; });
+
+initGM();
+loadReplays();
+</script>
+</body>
+</html>

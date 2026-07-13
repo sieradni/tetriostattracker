@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Match Detail — Tetrio Stats Tracker</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f12; color: #e0e0e0; min-height: 100vh; }
+        nav { background: #1a1a22; padding: 0.75rem 1.5rem; display: flex; gap: 1.5rem; align-items: center; border-bottom: 1px solid #2a2a35; }
+        nav a { color: #a0a0b0; text-decoration: none; font-size: 0.9rem; font-weight: 500; padding: 0.3rem 0; border-bottom: 2px solid transparent; }
+        nav a:hover, nav a.active { color: #fff; border-bottom-color: #6c5ce7; }
+        nav .brand { color: #fff; font-weight: 700; font-size: 1.05rem; margin-right: auto; letter-spacing: 0.3px; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+        .card { background: #1a1a22; border: 1px solid #2a2a35; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
+        .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; color: #6c5ce7; margin-bottom: 0.5rem; }
+        .grid-2 { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th { text-align: left; padding: 0.5rem; color: #888; font-weight: 600; border-bottom: 1px solid #2a2a35; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.3px; }
+        td { padding: 0.4rem 0.5rem; border-bottom: 1px solid #222; }
+        tr.win { border-left: 3px solid #00b894; }
+        tr.loss { border-left: 3px solid #d63031; }
+        a { color: #6c5ce7; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .hero-score { text-align: center; padding: 1rem 0; }
+        .hero-score .score-display { font-size: 3rem; font-weight: 700; }
+        .hero-score .score-display.win { color: #00b894; }
+        .hero-score .score-display.loss { color: #d63031; }
+        .hero-score .players { font-size: 1.2rem; color: #aaa; margin-top: 0.3rem; }
+        .hero-score .winner { font-size: 0.85rem; color: #6c5ce7; margin-top: 0.2rem; }
+        canvas { width: 100% !important; max-height: 300px; }
+        .chart-container { position: relative; width: 100%; }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">Tetrio Tracker</span>
+        <a href="/">Overview</a>
+        <a href="/trends">Trends</a>
+        <a href="/pbs">PBs</a>
+        <a href="/sessions">Sessions</a>
+        <a href="/replays">Replays</a>
+        <a href="/matches">Matches</a>
+    </nav>
+    <div class="container" id="app"></div>
+    <script>
+const match = /*{{MATCH_DATA}}*/;
+
+function fmt(ms) {
+    const s = ms / 1000;
+    const m = Math.floor(s / 60);
+    const sec = (s % 60).toFixed(1);
+    return m > 0 ? `${m}:${sec.padStart(4,'0')}` : `${sec}s`;
+}
+
+const app = document.getElementById('app');
+const p1 = match.player1_name;
+const p2 = match.player2_name;
+const p1w = match.player1_wins;
+const p2w = match.player2_wins;
+const isP1Win = p1w > p2w;
+const rounds = match.rounds;
+const p1Rounds = rounds.filter(r => r.player_name === p1);
+const p2Rounds = rounds.filter(r => r.player_name === p2);
+
+const p1AvgApm = p1Rounds.length ? (p1Rounds.reduce((s,r) => s + r.apm, 0) / p1Rounds.length).toFixed(1) : 0;
+const p2AvgApm = p2Rounds.length ? (p2Rounds.reduce((s,r) => s + r.apm, 0) / p2Rounds.length).toFixed(1) : 0;
+const p1AvgPps = p1Rounds.length ? (p1Rounds.reduce((s,r) => s + r.pps, 0) / p1Rounds.length).toFixed(2) : 0;
+const p2AvgPps = p2Rounds.length ? (p2Rounds.reduce((s,r) => s + r.pps, 0) / p2Rounds.length).toFixed(2) : 0;
+const p1AvgVs = p1Rounds.length ? (p1Rounds.reduce((s,r) => s + r.vsscore, 0) / p1Rounds.length).toFixed(1) : 0;
+const p2AvgVs = p2Rounds.length ? (p2Rounds.reduce((s,r) => s + r.vsscore, 0) / p2Rounds.length).toFixed(1) : 0;
+const p1Kills = p1Rounds.reduce((s,r) => s + r.kills, 0);
+const p2Kills = p2Rounds.reduce((s,r) => s + r.kills, 0);
+
+function roundRows(playerRounds, isP1) {
+    return playerRounds.map(r => {
+        const won = r.alive;
+        const cls = won ? 'win' : 'loss';
+        return `<tr class="${cls}">
+            <td style="font-weight:600">R${r.round_number}</td>
+            <td>${won ? '<span style="color:#00b894">&#10003;</span>' : '<span style="color:#d63031">&#10007;</span>'}</td>
+            <td>${fmt(r.lifetime)}</td>
+            <td>${r.apm.toFixed(1)}</td>
+            <td>${r.pps.toFixed(2)}</td>
+            <td>${r.vsscore.toFixed(1)}</td>
+            <td>${r.garbagesent}</td>
+            <td>${r.garbagereceived}</td>
+            <td>${r.kills}</td>
+        </tr>`;
+    }).join('');
+}
+
+app.innerHTML = `
+    <a href="/matches" style="color:#888;font-size:0.85rem;">&larr; Back to matches</a>
+
+    <div class="hero-score card">
+        <div class="score-display ${isP1Win ? 'win' : 'loss'}">${p1w} - ${p2w}</div>
+        <div class="players">${p1} vs ${p2}</div>
+        <div class="winner">Winner: ${match.winner_name}</div>
+        <div style="color:#555;font-size:0.8rem;margin-top:0.3rem;">${new Date(match.timestamp).toLocaleString()}</div>
+    </div>
+
+    <div class="grid-2">
+        <div class="card">
+            <h2>${p1} — Match Stats</h2>
+            <table>
+                <tr><td style="color:#888">Avg APM</td><td style="font-weight:700;color:${isP1Win ? '#00b894' : '#e0e0e0'}">${p1AvgApm}</td></tr>
+                <tr><td style="color:#888">Avg PPS</td><td>${p1AvgPps}</td></tr>
+                <tr><td style="color:#888">Avg VS Score</td><td>${p1AvgVs}</td></tr>
+                <tr><td style="color:#888">Total Kills</td><td>${p1Kills}</td></tr>
+                <tr><td style="color:#888">Wins</td><td style="font-weight:700;color:#00b894">${p1w}</td></tr>
+            </table>
+        </div>
+        <div class="card">
+            <h2>${p2} — Match Stats</h2>
+            <table>
+                <tr><td style="color:#888">Avg APM</td><td style="font-weight:700;color:${!isP1Win ? '#00b894' : '#e0e0e0'}">${p2AvgApm}</td></tr>
+                <tr><td style="color:#888">Avg PPS</td><td>${p2AvgPps}</td></tr>
+                <tr><td style="color:#888">Avg VS Score</td><td>${p2AvgVs}</td></tr>
+                <tr><td style="color:#888">Total Kills</td><td>${p2Kills}</td></tr>
+                <tr><td style="color:#888">Wins</td><td style="font-weight:700;color:#00b894">${p2w}</td></tr>
+            </table>
+        </div>
+    </div>
+
+    <div class="grid-2">
+        <div class="card" style="padding:0;">
+            <table>
+                <thead><tr><th>Round</th><th>Result</th><th>Time</th><th>APM</th><th>PPS</th><th>VS</th><th>Sent</th><th>Recv</th><th>Kills</th></tr></thead>
+                <tbody>${roundRows(p1Rounds, true)}</tbody>
+            </table>
+        </div>
+        <div class="card" style="padding:0;">
+            <table>
+                <thead><tr><th>Round</th><th>Result</th><th>Time</th><th>APM</th><th>PPS</th><th>VS</th><th>Sent</th><th>Recv</th><th>Kills</th></tr></thead>
+                <tbody>${roundRows(p2Rounds, false)}</tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Per-Round APM Comparison</h2>
+        <div class="chart-container"><canvas id="apmChart"></canvas></div>
+    </div>
+    <div class="card">
+        <h2>Per-Round PPS Comparison</h2>
+        <div class="chart-container"><canvas id="ppsChart"></canvas></div>
+    </div>
+`;
+
+const roundNums = [...new Set(rounds.map(r => r.round_number))].sort();
+const p1ByRound = roundNums.map(n => { const r = p1Rounds.find(x => x.round_number === n); return r ? r.apm : null; });
+const p2ByRound = roundNums.map(n => { const r = p2Rounds.find(x => x.round_number === n); return r ? r.apm : null; });
+
+new Chart(document.getElementById('apmChart'), {
+    type: 'bar',
+    data: {
+        labels: roundNums.map(n => `R${n}`),
+        datasets: [
+            { label: p1, data: p1ByRound, backgroundColor: '#6c5ce788', borderRadius: 4 },
+            { label: p2, data: p2ByRound, backgroundColor: '#00b89488', borderRadius: 4 },
+        ],
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { x: { ticks: { color: '#888' } }, y: { beginAtZero: true, ticks: { color: '#888' } } },
+        plugins: { legend: { labels: { color: '#aaa', boxWidth: 12 } } },
+    },
+});
+
+const p1Pps = roundNums.map(n => { const r = p1Rounds.find(x => x.round_number === n); return r ? r.pps : null; });
+const p2Pps = roundNums.map(n => { const r = p2Rounds.find(x => x.round_number === n); return r ? r.pps : null; });
+
+new Chart(document.getElementById('ppsChart'), {
+    type: 'bar',
+    data: {
+        labels: roundNums.map(n => `R${n}`),
+        datasets: [
+            { label: p1, data: p1Pps, backgroundColor: '#6c5ce788', borderRadius: 4 },
+            { label: p2, data: p2Pps, backgroundColor: '#00b89488', borderRadius: 4 },
+        ],
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { x: { ticks: { color: '#888' } } }, y: { beginAtZero: true, ticks: { color: '#888' } },
+        plugins: { legend: { labels: { color: '#aaa', boxWidth: 12 } } },
+    },
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Replay Detail — Tetrio Stats Tracker</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f12; color: #e0e0e0; min-height: 100vh; }
+        nav { background: #1a1a22; padding: 0.75rem 1.5rem; display: flex; gap: 1.5rem; align-items: center; border-bottom: 1px solid #2a2a35; }
+        nav a { color: #a0a0b0; text-decoration: none; font-size: 0.9rem; font-weight: 500; padding: 0.3rem 0; border-bottom: 2px solid transparent; }
+        nav a:hover, nav a.active { color: #fff; border-bottom-color: #6c5ce7; }
+        nav .brand { color: #fff; font-weight: 700; font-size: 1.05rem; margin-right: auto; letter-spacing: 0.3px; }
+        nav select { background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45; border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.8rem; cursor: pointer; outline: none; }
+        nav select:hover { border-color: #6c5ce7; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+        .card { background: #1a1a22; border: 1px solid #2a2a35; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
+        .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; color: #6c5ce7; margin-bottom: 0.5rem; }
+        .grid { display: grid; gap: 1rem; }
+        .grid-3 { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+        .grid-2 { grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        td { padding: 0.4rem 0.5rem; border-bottom: 1px solid #222; }
+        canvas { width: 100% !important; max-height: 300px; }
+        .chart-container { position: relative; width: 100%; }
+        a { color: #6c5ce7; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .hero-stat { font-size: 2.2rem; font-weight: 700; color: #00b894; text-align: center; padding: 0.5rem 0; }
+        .hero-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; color: #888; text-align: center; }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">Tetrio Tracker</span>
+        <a href="/">Overview</a>
+        <a href="/trends">Trends</a>
+        <a href="/pbs">PBs</a>
+        <a href="/sessions">Sessions</a>
+        <a href="/replays">Replays</a>
+        <a href="/matches">Matches</a>
+        <select id="gmSelect"></select>
+    </nav>
+    <div class="container" id="app"></div>
+    <script>
+async function initGM() {
+    const sel = document.getElementById('gmSelect');
+    const modes = await fetch('/api/gamemodes').then(r => r.json());
+    const current = localStorage.getItem('tetrio_gm') || modes[0] || 'blitz';
+    sel.innerHTML = modes.map(g => `<option value="${g}"${g===current?' selected':''}>${g === '40l' ? '40L' : g.charAt(0).toUpperCase()+g.slice(1)}</option>`).join('');
+    sel.addEventListener('change', function() { localStorage.setItem('tetrio_gm', this.value); location.reload(); });
+}
+function fmt(secs) { const m = Math.floor(secs / 60); const s = (secs % 60).toFixed(2); return m > 0 ? `${m}:${s.padStart(5,'0')}` : `${s}s`; }
+initGM();
+
+const replay = /*{{REPLAY_DATA}}*/;
+const s = replay.stats;
+const gamemode = replay.gamemode;
+const is40l = gamemode === '40l';
+const time = (s.final_time || 0) / 1000;
+const perfectPct = s.pieces_placed ? ((s.finesse_perfect_pieces || 0) / s.pieces_placed * 100).toFixed(0) : '—';
+
+document.getElementById('app').innerHTML = `
+    <a href="/replays" style="color:#888;font-size:0.85rem;">&larr; Back to replays</a>
+    <h1 style="margin:0.75rem 0;font-size:1.3rem;">Replay Detail <span class="badge" style="font-size:0.7rem;background:#2a2a35;padding:0.2rem 0.5rem;border-radius:4px;">${gamemode}</span></h1>
+
+    ${is40l ? `
+    <div class="card" style="text-align:center;border-color:#00b89444;">
+        <div class="hero-stat">${fmt(time)}</div>
+        <div class="hero-label">Final Time</div>
+    </div>` : `
+    <div class="card" style="text-align:center;border-color:#6c5ce744;">
+        <div class="hero-stat" style="color:#6c5ce7">${s.score.toLocaleString()}</div>
+        <div class="hero-label">Score</div>
+    </div>`}
+
+    <div class="grid grid-3">
+        <div class="card">
+            <h2>${is40l ? 'Speed' : 'Core Stats'}</h2>
+            <table>
+                ${is40l ? `
+                <tr><td style="color:#888">Time</td><td style="font-weight:700;color:#00b894">${fmt(time)}</td></tr>
+                <tr><td style="color:#888">PPS</td><td>${s.pps.toFixed(2)}</td></tr>
+                <tr><td style="color:#888">KPS</td><td>${s.kps.toFixed(2)}</td></tr>
+                <tr><td style="color:#888">KPP</td><td>${s.kpp.toFixed(2)}</td></tr>
+                <tr><td style="color:#888">Score</td><td>${s.score.toLocaleString()}</td></tr>
+                <tr><td style="color:#888">Lines</td><td>${s.lines}</td></tr>
+                ` : `
+                <tr><td style="color:#888">Score</td><td style="font-weight:700">${s.score.toLocaleString()}</td></tr>
+                <tr><td style="color:#888">Lines</td><td>${s.lines}</td></tr>
+                <tr><td style="color:#888">Level</td><td>${s.level}</td></tr>
+                <tr><td style="color:#888">APM</td><td>${s.apm.toFixed(2)}</td></tr>
+                <tr><td style="color:#888">PPS</td><td>${s.pps.toFixed(2)}</td></tr>
+                <tr><td style="color:#888">Pieces</td><td>${s.pieces_placed}</td></tr>
+                <tr><td style="color:#888">Inputs</td><td>${s.inputs}</td></tr>
+                <tr><td style="color:#888">Holds</td><td>${s.holds}</td></tr>
+                `}
+            </table>
+        </div>
+        <div class="card">
+            <h2>Efficiency</h2>
+            <table>
+                ${is40l ? `
+                <tr><td style="color:#888">PPS</td><td>${s.pps.toFixed(2)}</td></tr>
+                <tr><td style="color:#888">KPS</td><td>${s.kps.toFixed(2)}</td></tr>
+                <tr><td style="color:#888">KPP</td><td>${s.kpp.toFixed(2)}</td></tr>
+                <tr><td style="color:#888">Finesse Faults</td><td>${s.finesse_faults}</td></tr>
+                <tr><td style="color:#888">Perfect Pieces</td><td>${s.finesse_perfect_pieces} / ${s.pieces_placed} (${perfectPct}%)</td></tr>
+                <tr><td style="color:#888">T-Spins</td><td>${s.tspins}</td></tr>
+                <tr><td style="color:#888">All Clears</td><td>${s.all_clears}</td></tr>
+                ` : `
+                <tr><td style="color:#888">KPP</td><td>${s.kpp.toFixed(2)}</td></tr>
+                <tr><td style="color:#888">KPS</td><td>${s.kps.toFixed(2)}</td></tr>
+                <tr><td style="color:#888">Top Combo</td><td>${s.top_combo}</td></tr>
+                <tr><td style="color:#888">Top BTB</td><td>${s.top_btb}</td></tr>
+                <tr><td style="color:#888">T-Spins</td><td>${s.tspins}</td></tr>
+                <tr><td style="color:#888">All Clears</td><td>${s.all_clears}</td></tr>
+                <tr><td style="color:#888">Finesse Faults</td><td>${s.finesse_faults}</td></tr>
+                <tr><td style="color:#888">Perfect Pieces</td><td>${s.finesse_perfect_pieces} / ${s.pieces_placed}</td></tr>
+                `}
+                <tr><td style="color:#888">Final Time</td><td>${time.toFixed(1)}s</td></tr>
+                <tr><td style="color:#888">Result</td><td>${s.gameover_reason || '—'}</td></tr>
+            </table>
+        </div>
+        <div class="card">
+            <h2>Clear Distribution</h2>
+            <div class="chart-container"><canvas id="clearChart"></canvas></div>
+            <div style="margin-top:0.75rem;">
+                <h2>T-Spin Breakdown</h2>
+                <div class="chart-container"><canvas id="tspinChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+`;
+
+new Chart(document.getElementById('clearChart'), {
+    type: 'doughnut',
+    data: {
+        labels: ['Singles','Doubles','Triples','Quads','Pentas','All Clears'],
+        datasets: [{ data: [s.singles, s.doubles, s.triples, s.quads, s.pentas, s.all_clears], backgroundColor: ['#636e72','#00b894','#fdcb6e','#e17055','#6c5ce7','#fd79a8'], borderWidth: 0 }],
+    },
+    options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: '#aaa', boxWidth: 12 } } } },
+});
+
+new Chart(document.getElementById('tspinChart'), {
+    type: 'bar',
+    data: {
+        labels: ['T-Spin\nSingles', 'T-Spin\nDoubles', 'T-Spin\nTriples', 'T-Spin\nQuads'],
+        datasets: [{ data: [s.tspin_singles, s.tspin_doubles, s.tspin_triples, s.tspin_quads], backgroundColor: ['#74b9ff','#6c5ce7','#a29bfe','#e17055'], borderRadius: 4 }],
+    },
+    options: {
+        responsive: true, maintainAspectRatio: false,
+        scales: { x: { ticks: { color: '#888' } }, y: { beginAtZero: true, ticks: { color: '#888', stepSize: 1 } } },
+        plugins: { legend: { display: false } },
+    },
+});
+</script>
+</body>
+</html>

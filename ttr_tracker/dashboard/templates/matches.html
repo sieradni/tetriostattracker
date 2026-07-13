@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Matches — Tetrio Stats Tracker</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f12; color: #e0e0e0; min-height: 100vh; }
+        nav { background: #1a1a22; padding: 0.75rem 1.5rem; display: flex; gap: 1.5rem; align-items: center; border-bottom: 1px solid #2a2a35; }
+        nav a { color: #a0a0b0; text-decoration: none; font-size: 0.9rem; font-weight: 500; padding: 0.3rem 0; border-bottom: 2px solid transparent; }
+        nav a:hover, nav a.active { color: #fff; border-bottom-color: #6c5ce7; }
+        nav .brand { color: #fff; font-weight: 700; font-size: 1.05rem; margin-right: auto; letter-spacing: 0.3px; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+        .card { background: #1a1a22; border: 1px solid #2a2a35; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
+        .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; color: #6c5ce7; margin-bottom: 0.5rem; }
+        .card h3 { font-size: 0.9rem; color: #e0e0e0; margin-bottom: 0.5rem; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+        th { text-align: left; padding: 0.6rem 0.5rem; color: #888; font-weight: 600; border-bottom: 1px solid #2a2a35; }
+        td { padding: 0.5rem; border-bottom: 1px solid #222; }
+        tr:hover td { background: #22222c; }
+        tr { cursor: pointer; }
+        .badge-win { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; background: #00b89422; color: #00b894; }
+        .badge-loss { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; background: #d6303122; color: #d63031; }
+        .score { font-weight: 700; }
+        .grid-2 { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); }
+        canvas { width: 100% !important; max-height: 280px; }
+        .chart-container { position: relative; width: 100%; }
+        select { background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45; border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.8rem; cursor: pointer; outline: none; margin-left: 0.5rem; }
+        select:hover { border-color: #6c5ce7; }
+        .player-selector { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
+        .stat-cell { text-align: center; font-size: 1.1rem; }
+        .stat-cell .val { font-weight: 700; }
+        .stat-cell .lbl { font-size: 0.65rem; color: #888; text-transform: uppercase; }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">Tetrio Tracker</span>
+        <a href="/">Overview</a>
+        <a href="/trends">Trends</a>
+        <a href="/pbs">PBs</a>
+        <a href="/sessions">Sessions</a>
+        <a href="/replays">Replays</a>
+        <a href="/matches" class="active">Matches</a>
+    </nav>
+    <div class="container">
+        <h1 style="margin-bottom:1rem;font-size:1.3rem;">Tetra League Matches</h1>
+        <div class="card" style="padding:0;">
+            <table>
+                <thead><tr><th>Date</th><th>Player 1</th><th>Score</th><th>Player 2</th><th>Winner</th></tr></thead>
+                <tbody id="match-table"></tbody>
+            </table>
+        </div>
+
+        <h2 style="margin:1.5rem 0 0.75rem;font-size:1.1rem;">League Trends</h2>
+        <div class="player-selector" id="playerSelector"></div>
+        <div class="grid-2" id="trend-cards"></div>
+        <div class="grid-2">
+            <div class="card"><h2>APM per Round</h2><div class="chart-container"><canvas id="apmTrend"></canvas></div></div>
+            <div class="card"><h2>PPS per Round</h2><div class="chart-container"><canvas id="ppsTrend"></canvas></div></div>
+            <div class="card"><h2>VS Score per Round</h2><div class="chart-container"><canvas id="vsTrend"></canvas></div></div>
+            <div class="card"><h2>Match Win Rate</h2><div class="chart-container"><canvas id="winTrend"></canvas></div></div>
+        </div>
+    </div>
+
+<script>
+const COLORS = { apm: '#6c5ce7', pps: '#00b894', vsscore: '#fdcb6e', wins: '#00b894' };
+
+async function loadMatches() {
+    const r = await fetch('/api/matches?limit=200');
+    const matches = await r.json();
+    const tbody = document.getElementById('match-table');
+    tbody.innerHTML = matches.map(m => {
+        const p1win = m.player1_wins > m.player2_wins;
+        const p2win = m.player2_wins > m.player1_wins;
+        return `<tr onclick="window.location='/matches/${m.id}'">
+            <td>${new Date(m.timestamp).toLocaleString()}</td>
+            <td class="score" style="color:${p1win ? '#00b894' : '#e0e0e0'}">${m.player1_name}</td>
+            <td style="text-align:center"><span class="${p1win ? 'badge-win' : (p2win ? 'badge-loss' : '')}">${m.player1_wins} - ${m.player2_wins}</span></td>
+            <td class="score" style="color:${p2win ? '#00b894' : '#e0e0e0'}">${m.player2_name}</td>
+            <td style="font-weight:700;color:#6c5ce7">${m.winner_name}</td>
+        </tr>`;
+    }).join('');
+    if (matches.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:#888;padding:2rem;">No matches imported. Drop .ttrm files on the Replays page.</td></tr>';
+    }
+
+    // Build player list from matches
+    const players = new Map();
+    for (const m of matches) {
+        players.set(m.player1_name, true);
+        players.set(m.player2_name, true);
+    }
+    const playerNames = [...players.keys()].sort();
+    const selector = document.getElementById('playerSelector');
+    const stored = localStorage.getItem('tetrio_league_player') || playerNames[0] || '';
+    selector.innerHTML = `
+        <span style="color:#888;font-size:0.9rem;">Player:</span>
+        <select id="playerSelect">${playerNames.map(p => `<option value="${p}"${p===stored?' selected':''}>${p}</option>`).join('')}</select>
+    `;
+    document.getElementById('playerSelect').addEventListener('change', function() {
+        localStorage.setItem('tetrio_league_player', this.value);
+        loadPlayerTrends(this.value);
+    });
+    if (stored) loadPlayerTrends(stored);
+}
+
+async function loadPlayerTrends(playerName) {
+    const r = await fetch(`/api/matches/per_round_trends?player_name=${encodeURIComponent(playerName)}`);
+    const data = await r.json();
+
+    // Summary cards
+    const allApm = (data.apm || []).map(d => d[1]);
+    const allPps = (data.pps || []).map(d => d[1]);
+    const allVs = (data.vsscore || []).map(d => d[1]);
+    const allKills = (data.kills || []).map(d => d[1]);
+
+    const avgApm = allApm.length ? (allApm.reduce((a,b) => a+b, 0) / allApm.length).toFixed(1) : '—';
+    const avgPps = allPps.length ? (allPps.reduce((a,b) => a+b, 0) / allPps.length).toFixed(2) : '—';
+    const avgVs = allVs.length ? (allVs.reduce((a,b) => a+b, 0) / allVs.length).toFixed(1) : '—';
+    const totalKills = allKills.reduce((a,b) => a+b, 0);
+
+    document.getElementById('trend-cards').innerHTML = `
+        <div class="card">
+            <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:0.5rem;text-align:center;">
+                <div class="stat-cell"><div class="val" style="color:#6c5ce7">${avgApm}</div><div class="lbl">Avg APM</div></div>
+                <div class="stat-cell"><div class="val" style="color:#00b894">${avgPps}</div><div class="lbl">Avg PPS</div></div>
+                <div class="stat-cell"><div class="val" style="color:#fdcb6e">${avgVs}</div><div class="lbl">Avg VS</div></div>
+                <div class="stat-cell"><div class="val" style="color:#e17055">${totalKills}</div><div class="lbl">Total Kills</div></div>
+            </div>
+        </div>
+    `;
+
+    // APM trend
+    buildChart('apmTrend', data.apm || [], 'APM', COLORS.apm, false);
+    // PPS trend
+    buildChart('ppsTrend', data.pps || [], 'PPS', COLORS.pps, false);
+    // VS Score trend
+    buildChart('vsTrend', data.vsscore || [], 'VS Score', COLORS.vsscore, false);
+    // Win rate - compute rolling win rate per match
+    buildWinChart('winTrend', playerName);
+}
+
+async function buildWinChart(canvasId, playerName) {
+    const r = await fetch('/api/matches?limit=200');
+    const matches = await r.json();
+    let wins = 0, total = 0;
+    const labels = [], rates = [];
+    for (const m of matches) {
+        if (m.player1_name === playerName || m.player2_name === playerName) {
+            total++;
+            const p1w = m.player1_wins > m.player2_wins;
+            const p2w = m.player2_wins > m.player1_wins;
+            const didWin = (m.player1_name === playerName && p1w) || (m.player2_name === playerName && p2w);
+            if (didWin) wins++;
+            labels.push(new Date(m.timestamp).toLocaleDateString());
+            rates.push((wins / total * 100).toFixed(1));
+        }
+    }
+    if (labels.length < 2) {
+        document.getElementById(canvasId).parentElement.innerHTML = '<p style="color:#555;text-align:center;padding:2rem;">Need at least 2 matches</p>';
+        return;
+    }
+    new Chart(document.getElementById(canvasId), {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [{
+                label: 'Win Rate %',
+                data: rates,
+                borderColor: COLORS.wins,
+                backgroundColor: '#00b89422',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 3,
+            }],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            scales: {
+                x: { ticks: { color: '#888', maxTicksLimit: 8 } },
+                y: { ticks: { color: '#888' }, min: 0, max: 100 },
+            },
+            plugins: { legend: { labels: { color: '#aaa', boxWidth: 12 } } },
+        },
+    });
+}
+
+function buildChart(canvasId, rawData, label, color, inverse) {
+    if (rawData.length < 2) {
+        document.getElementById(canvasId).parentElement.innerHTML = '<p style="color:#555;text-align:center;padding:2rem;">Need at least 2 data points</p>';
+        return;
+    }
+    const labels = rawData.map(d => new Date(d[0]).toLocaleDateString());
+    const values = rawData.map(d => d[1]);
+    const movingAvg = values.map((v, i, a) => {
+        const slice = a.slice(Math.max(0, i - 10), i + 1);
+        return slice.reduce((s, x) => s + x, 0) / slice.length;
+    });
+    new Chart(document.getElementById(canvasId), {
+        type: 'line',
+        data: {
+            labels,
+            datasets: [
+                { label, data: values, borderColor: color, backgroundColor: color + '22', fill: true, tension: 0.3, pointRadius: 2 },
+                { label: '10-avg', data: movingAvg, borderColor: inverse ? '#d63031' : '#fff', borderDash: [3,3], pointRadius: 0, borderWidth: 1.5 },
+            ],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { intersect: false, mode: 'index' },
+            scales: {
+                x: { ticks: { color: '#888', maxTicksLimit: 8 } },
+                y: { ticks: { color: '#888' }, reverse: inverse },
+            },
+            plugins: { legend: { labels: { color: '#aaa', boxWidth: 12 } } },
+        },
+    });
+}
+
+loadMatches();
+</script>
+</body>
+</html>

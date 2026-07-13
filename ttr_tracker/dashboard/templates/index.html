@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tetrio Stats Tracker</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #0f0f12;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+        nav {
+            background: #1a1a22;
+            padding: 0.75rem 1.5rem;
+            display: flex;
+            gap: 1.5rem;
+            align-items: center;
+            border-bottom: 1px solid #2a2a35;
+        }
+        nav a { color: #a0a0b0; text-decoration: none; font-size: 0.9rem; font-weight: 500; padding: 0.3rem 0; border-bottom: 2px solid transparent; transition: 0.15s; }
+        nav a:hover, nav a.active { color: #fff; border-bottom-color: #6c5ce7; }
+        nav .brand { color: #fff; font-weight: 700; font-size: 1.05rem; margin-right: auto; letter-spacing: 0.3px; }
+        nav select { background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45; border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.8rem; cursor: pointer; outline: none; }
+        nav select:hover { border-color: #6c5ce7; }
+        .container { max-width: 1200px; margin: 0 auto; padding: 1.5rem; }
+        .card { background: #1a1a22; border: 1px solid #2a2a35; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
+        .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; color: #6c5ce7; margin-bottom: 0.5rem; }
+        .stat-value { font-size: 1.6rem; font-weight: 700; color: #fff; }
+        .stat-label { font-size: 0.75rem; color: #888; }
+        .grid { display: grid; gap: 1rem; }
+        .grid-2 { grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+        canvas { width: 100% !important; max-height: 350px; }
+        .chart-container { position: relative; width: 100%; }
+        .pb-value { font-size: 1.8rem; font-weight: 700; color: #6c5ce7; }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">Tetrio Tracker</span>
+        <a href="/" class="active">Overview</a>
+        <a href="/trends">Trends</a>
+        <a href="/pbs">PBs</a>
+        <a href="/sessions">Sessions</a>
+        <a href="/replays">Replays</a>
+        <a href="/matches">Matches</a>
+        <select id="gmSelect"></select>
+    </nav>
+    <div class="container">
+        <div class="grid grid-2" id="summary-cards"></div>
+        <div style="margin-top: 1rem;">
+            <div class="card">
+                <h2 id="trend-title">Recent Games</h2>
+                <div class="chart-container"><canvas id="miniTrend"></canvas></div>
+            </div>
+        </div>
+    </div>
+
+<script>
+async function initGM() {
+    const sel = document.getElementById('gmSelect');
+    const modes = await fetch('/api/gamemodes').then(r => r.json());
+    const current = localStorage.getItem('tetrio_gm') || modes[0] || 'blitz';
+    sel.innerHTML = modes.map(g => `<option value="${g}"${g===current?' selected':''}>${g === '40l' ? '40L' : g.charAt(0).toUpperCase()+g.slice(1)}</option>`).join('');
+    sel.addEventListener('change', function() { localStorage.setItem('tetrio_gm', this.value); location.reload(); });
+}
+function gm() { return localStorage.getItem('tetrio_gm') || 'blitz'; }
+
+function fmt(secs) {
+    const m = Math.floor(secs / 60);
+    const s = (secs % 60).toFixed(1);
+    return m > 0 ? `${m}m${s}s` : `${s}s`;
+}
+
+async function loadLeagueOverview() {
+    const r = await fetch('/api/matches?limit=200');
+    const matches = await r.json();
+    if (matches.length === 0) return;
+
+    const players = new Map();
+    for (const m of matches) {
+        for (const p of [m.player1_name, m.player2_name]) {
+            if (!players.has(p)) players.set(p, { matches: 0, wins: 0 });
+            players.get(p).matches++;
+            if (m.winner_name === p) players.get(p).wins++;
+        }
+    }
+
+    const container = document.getElementById('summary-cards');
+    container.innerHTML = `<div class="card" style="grid-column:1/-1"><h2>League Summary (${matches.length} matches)</h2></div>`;
+    for (const [name, stats] of players) {
+        const wr = stats.matches ? ((stats.wins / stats.matches) * 100).toFixed(0) : 0;
+        const card = document.createElement('div');
+        card.className = 'card';
+        card.innerHTML = `
+            <div class="stat-value">${name}</div>
+            <div style="display:flex;gap:1rem;margin-top:0.5rem;font-size:0.85rem;">
+                <span>${stats.matches} matches</span>
+                <span style="color:#00b894">${stats.wins}W</span>
+                <span style="color:#d63031">${stats.matches - stats.wins}L</span>
+                <span style="color:#6c5ce7;font-weight:700">${wr}% WR</span>
+            </div>
+        `;
+        container.appendChild(card);
+    }
+}
+
+(async function() {
+    await initGM();
+    const gamemode = gm();
+
+    if (gamemode === 'league') {
+        await loadLeagueOverview();
+        document.getElementById('trend-title').textContent = 'League Matches';
+        document.getElementById('miniTrend').parentElement.parentElement.style.display = 'none';
+        return;
+    }
+
+    const r = await fetch(`/api/summary?gamemode=${gamemode}`);
+    const s = await r.json();
+    const container = document.getElementById('summary-cards');
+
+    if (s.total === 0) {
+        container.innerHTML = `<div class="card"><p>No replays for <strong>${gamemode}</strong>. Drop some .ttr files on the <a href="/replays">Replays</a> page.</p></div>`;
+        return;
+    }
+
+    let cards;
+    if (gamemode === '40l') {
+        cards = [
+            { label: 'Total Games', value: s.total },
+            { label: 'Avg Time', value: fmt(s.recent_avg.time || 0) },
+            { label: 'Avg PPS', value: (s.recent_avg.pps || 0).toFixed(2) },
+            { label: 'Avg KPS', value: (s.recent_avg.kps || 0).toFixed(2) },
+            { label: 'Avg KPP', value: (s.recent_avg.kpp || 0).toFixed(2) },
+            { label: 'Avg Finesse Faults', value: Math.round(s.recent_avg.finesse_faults || 0) },
+            { label: 'Perfect Pieces', value: Math.round((s.recent_avg.perfect_pct || 0) * 100) + '%' },
+        ];
+    } else {
+        cards = [
+            { label: 'Total Games', value: s.total },
+            { label: 'Avg Score', value: Math.round(s.recent_avg.score || 0).toLocaleString() },
+            { label: 'Avg APM', value: (s.recent_avg.apm || 0).toFixed(1) },
+            { label: 'Avg PPS', value: (s.recent_avg.pps || 0).toFixed(2) },
+            { label: 'Avg KPP', value: (s.recent_avg.kpp || 0).toFixed(2) },
+            { label: 'Avg KPS', value: (s.recent_avg.kps || 0).toFixed(2) },
+            { label: 'Avg Lines', value: Math.round(s.recent_avg.lines || 0) },
+        ];
+    }
+
+    container.innerHTML = cards.map(c => `
+        <div class="card">
+            <div class="stat-value">${c.value}</div>
+            <div class="stat-label">${c.label}</div>
+        </div>
+    `).join('');
+
+    if (s.pbs && s.pbs.score) {
+        const pbCard = document.createElement('div');
+        pbCard.className = 'card';
+        if (gamemode === '40l' && s.pbs.final_time) {
+            pbCard.innerHTML = `
+                <h2>Personal Best</h2>
+                <div class="pb-value">${fmt(s.pbs.final_time[0] / 1000)}</div>
+                <div class="stat-label">Time — ${new Date(s.pbs.final_time[2]).toLocaleDateString()}</div>
+            `;
+        } else {
+            pbCard.innerHTML = `
+                <h2>Personal Best</h2>
+                <div class="pb-value">${Number(s.pbs.score[0]).toLocaleString()}</div>
+                <div class="stat-label">Score — ${new Date(s.pbs.score[2]).toLocaleDateString()}</div>
+            `;
+        }
+        container.appendChild(pbCard);
+    }
+
+    document.getElementById('trend-title').textContent = gamemode === '40l' ? 'Recent Games — Time (s)' : 'Recent Games — Score';
+
+    const tr = await fetch(`/api/trends?gamemode=${gamemode}`);
+    const t = await tr.json();
+    const trendKey = gamemode === '40l' ? 'time' : 'score';
+    if (t[trendKey] && t[trendKey].length >= 2) {
+        const labels = t[trendKey].map(d => new Date(d[0]).toLocaleDateString());
+        const values = t[trendKey].map(d => d[1]);
+        new Chart(document.getElementById('miniTrend'), {
+            type: 'line',
+            data: {
+                labels,
+                datasets: [{
+                    label: gamemode === '40l' ? 'Time (s)' : 'Score',
+                    data: values,
+                    borderColor: '#6c5ce7',
+                    backgroundColor: 'rgba(108,92,231,0.1)',
+                    fill: true,
+                    tension: 0.3,
+                }],
+            },
+            options: {
+                responsive: true, maintainAspectRatio: false,
+                scales: {
+                    x: { ticks: { color: '#888', maxTicksLimit: 10 } },
+                    y: { ticks: { color: '#888' } },
+                },
+                plugins: { legend: { labels: { color: '#aaa' } } },
+            },
+        });
+    }
+})();
+</script>
+</body>
+</html>
