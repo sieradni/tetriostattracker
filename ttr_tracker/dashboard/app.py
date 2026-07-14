@@ -328,8 +328,12 @@ async def api_delete_partial_run(run_id: int):
 # ── Blitz Stats / Survival ───────────────────────────────────────────────
 
 @app.get("/api/blitz/survival")
-async def api_blitz_survival(gamemode: str = Query("blitz")):
-    return get_blitz_survival(db, gamemode)
+async def api_blitz_survival(gamemode: str = Query("blitz"),
+                             start_date: Optional[str] = Query(None),
+                             end_date: Optional[str] = Query(None)):
+    start = datetime.fromisoformat(start_date) if start_date else None
+    end = datetime.fromisoformat(end_date) if end_date else None
+    return get_blitz_survival(db, gamemode, start, end)
 
 
 # ── OCR ──────────────────────────────────────────────────────────────────

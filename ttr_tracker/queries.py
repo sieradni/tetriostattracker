@@ -317,8 +317,10 @@ def get_partial_run_detail(db: Database, run_id: int) -> Optional[dict]:
     }
 
 
-def get_blitz_survival(db: Database, gamemode: str = "blitz") -> dict:
-    full, partial = db.get_all_misdrop_data(gamemode)
+def get_blitz_survival(db: Database, gamemode: str = "blitz",
+                       start_date: Optional[datetime] = None,
+                       end_date: Optional[datetime] = None) -> dict:
+    full, partial = db.get_all_misdrop_data(gamemode, start_date, end_date)
     return compute_likelihoods(full, partial)
 
 

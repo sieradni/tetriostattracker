@@ -157,11 +157,15 @@ def _find_label_lines(lines: list[dict]) -> list[tuple[str, dict]]:
     return found
 
 
+def _has_digit(text: str) -> bool:
+    return bool(re.search(r"\d", text))
+
+
 def _value_below(lines: list[dict], anchor: dict, max_dist: int = 120) -> Optional[dict]:
     """Find the closest text line below *anchor* within horizontal range.
 
-    Values can be left-aligned while labels are right-aligned, so the
-    horizontal search region is generous (2× label width + extra padding).
+    Prefers lines that contain digits, so garbage OCR artifacts between
+    the label and the real value are skipped.
     """
     label_w = anchor["right"] - anchor["left"]
     candidates = []
@@ -176,12 +180,38 @@ def _value_below(lines: list[dict], anchor: dict, max_dist: int = 120) -> Option
             candidates.append(ln)
     if not candidates:
         return None
+    numeric = [c for c in candidates if _has_digit(c["text"])]
+    if numeric:
+        return min(numeric, key=lambda ln: ln["top"])
     return min(candidates, key=lambda ln: ln["top"])
 
 
 def _parse_number(text: str) -> Optional[int]:
-    m = RE_NUMBER.match(text.strip().replace(",", ""))
-    return int(m.group()) if m else None
+    cleaned = text.strip().replace(",", "")
+    m = RE_NUMBER.match(cleaned)
+    if m:
+        val = int(m.group())
+        remainder = cleaned[m.end():]
+        if remainder:
+            space_digits = re.match(r"\s+(\d+)", remainder)
+            if space_digits:
+                next_digits = space_digits.group(1)
+                after_next = remainder[space_digits.end():]
+                # Collapse if the split continues into a rate decimal
+                if len(next_digits) <= 2 and re.match(r"\.\s*\d", after_next):
+                    collapsed = cleaned[:m.end()] + next_digits
+                    m2 = RE_NUMBER.match(collapsed)
+                    if m2 and int(m2.group()) > val:
+                        return int(m2.group())
+                # Or if it's all remaining digits (nothing after) and
+                # the first group is 3+ digits (likely a multi-group score)
+                if not after_next and val >= 100:
+                    collapsed = cleaned[:m.end()] + next_digits
+                    m2 = RE_NUMBER.match(collapsed)
+                    if m2:
+                        return int(m2.group())
+        return val
+    return None
 
 
 def _fix_decimal(raw: float, max_val: float = 15.0) -> float:
@@ -245,10 +275,10 @@ def _find_all_clears_value(lines: list[dict], all_clears_anchor: dict) -> Option
     """Find a small number near the ALL CLEARS label (to the right or below)."""
     label_width = all_clears_anchor["right"] - all_clears_anchor["left"]
 
-    # Look to the right: extends up to 3x label width to the right
-    right_bound = all_clears_anchor["right"] + label_width * 3
+    # Look to the right: extends up to 5x label width to the right
+    right_bound = all_clears_anchor["right"] + label_width * 5
     top_bound = all_clears_anchor["top"] - 30
-    bottom_bound = all_clears_anchor["bottom"] + 100
+    bottom_bound = all_clears_anchor["bottom"] + 120
 
     candidates = []
     for ln in lines:
@@ -263,7 +293,7 @@ def _find_all_clears_value(lines: list[dict], all_clears_anchor: dict) -> Option
             candidates.append((num, ln))
 
     if candidates:
-        return min(candidates, key=lambda c: abs(c[1]["top"] - all_clears_anchor["top"]))
+        return min(candidates, key=lambda c: abs(c[1]["top"] - all_clears_anchor["top"]))[0]
 
     return None
 
@@ -386,8 +416,11 @@ def _focused_number_near_label(img: Image.Image, label_anchor: dict, preprocesse
         bright = Image.fromarray((bright_mask.astype(np.uint8) * 255), mode="L")
         sources.append(bright)
 
+    label_w = label_anchor["right"] - label_anchor["left"]
+    label_mid = (label_anchor["left"] + label_anchor["right"]) // 2
+
     regions = [
-        # Directly below the label (the value sits here in larger font)
+        # Directly below the label
         (
             max(0, label_anchor["left"] - 5),
             label_anchor["bottom"] + 2,
@@ -403,7 +436,21 @@ def _focused_number_near_label(img: Image.Image, label_anchor: dict, preprocesse
         ),
     ]
 
-    ambiguous_vals = set()
+    approach_a_vals: dict[int, int] = {}
+    approach_b_vals: dict[int, int] = {}
+    multi_digit_val: Optional[int] = None
+
+    def _check_bailout() -> Optional[int]:
+        if multi_digit_val is not None:
+            return multi_digit_val
+        if approach_a_vals:
+            best = max(approach_a_vals, key=approach_a_vals.get)
+            if approach_a_vals[best] >= 2 or len(approach_a_vals) == 1:
+                return best
+        if approach_b_vals and len(approach_b_vals) == 1:
+            return next(iter(approach_b_vals))
+        return None
+
     for src in sources:
         for left, top, right, bottom in regions:
             if right - left < 20 or bottom - top < 10:
@@ -414,7 +461,6 @@ def _focused_number_near_label(img: Image.Image, label_anchor: dict, preprocesse
             big = crop.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
             arr = np.array(big, dtype=np.uint8)
 
-            # Approach A: no explicit threshold (just invert)
             inv = Image.fromarray((255 - arr).astype(np.uint8), mode="L")
             for cfg in [
                 "--psm 8 --oem 3 -c tessedit_char_whitelist=0123456789",
@@ -430,12 +476,12 @@ def _focused_number_near_label(img: Image.Image, label_anchor: dict, preprocesse
                         continue
                     val = _parse_digit_ocr(txt)
                     if val is not None and 0 <= val <= 9:
-                        if txt.isdigit() or "tessedit_char_whitelist=0123456789" in cfg:
-                            return val
-                        ambiguous_vals.add(val)
+                        approach_a_vals[val] = approach_a_vals.get(val, 0) + 1
+                    multi = _parse_number(txt)
+                    if multi is not None and 10 <= multi <= 20:
+                        multi_digit_val = multi
 
-            # Approach B: aggressive threshold for very faint text
-            for thr_val in (20, 40, 60):
+            for thr_val in (40, 60):
                 thr_arr = np.where((255 - arr) > thr_val, 255, 0).astype(np.uint8)
                 thr_img = Image.fromarray(thr_arr, mode="L")
                 for cfg in [
@@ -452,12 +498,18 @@ def _focused_number_near_label(img: Image.Image, label_anchor: dict, preprocesse
                             continue
                         val = _parse_digit_ocr(txt)
                         if val is not None and 0 <= val <= 9:
-                            if txt.isdigit() or "tessedit_char_whitelist=0123456789" in cfg:
-                                return val
-                            ambiguous_vals.add(val)
-    if len(ambiguous_vals) == 1:
-        return ambiguous_vals.pop()
-    return None
+                            approach_b_vals[val] = approach_b_vals.get(val, 0) + 1
+                        multi = _parse_number(txt)
+                        if multi is not None and 10 <= multi <= 20:
+                            multi_digit_val = multi
+
+        # Bail out after each source if we have a clear answer
+        bail = _check_bailout()
+        if bail is not None:
+            return bail
+
+    # Final check (same criteria, reached only when all sources tried)
+    return _check_bailout()
 
 
 def _parse_rate_fallback(text: str, min_val: float = 0.5, max_val: float = 10.0) -> Optional[float]:
@@ -501,13 +553,13 @@ def _parse_timer(lines: list[dict], img_w: int, img_h: int) -> Optional[float]:
 
     Returns seconds remaining, or None.
 
-    Uses a strict height filter (top 15% of the image) to avoid
+    Uses a strict height filter (top 22% of the image) to avoid
     false positives from text elsewhere on the screen.
     """
     centre_x = img_w / 2
     candidates = []
     for ln in sorted(lines, key=lambda x: x["top"]):
-        if ln["top"] > img_h * 0.15:
+        if ln["top"] > img_h * 0.22:
             continue
         mid = (ln["left"] + ln["right"]) / 2
         if abs(mid - centre_x) > centre_x * 0.45:
@@ -619,16 +671,6 @@ def cross_validate(result: dict) -> None:
         if ratio < 0.8 or ratio > 1.25:
             _downgrade(s, "spp")
 
-    # All-clears heuristic: if OCR gives a suspicious value, correct it
-    # based on context.  With fewer than ~15 pieces or very low SPP
-    # (< 100), a perfect clear is essentially impossible.
-    ac = s.get("all_clears", {}).get("value")
-    if ac is not None:
-        pv = s.get("pieces_placed", {}).get("value")
-        sv = s.get("spp", {}).get("value")
-        if (pv is not None and pv < 15) or (sv is not None and sv < 100):
-            s["all_clears"]["value"] = 0
-
     # ── Fallback: compute missing fields from available ones ──
     # Time-independent calculations (SPP, KPP) are always exact given
     # their inputs, so they always override OCR.
@@ -636,6 +678,18 @@ def cross_validate(result: dict) -> None:
         _set_result(result, "spp", round(score / pieces, 1), "high")
     if inputs is not None and pieces is not None and pieces > 0:
         _set_result(result, "kpp", round(inputs / pieces, 2), "high")
+
+    # Re-read computed SPP for all-clears check
+    spp = v("spp")
+
+    # All-clears heuristic: when the OCR found very few pieces or
+    # extremely low SPP, all-clears is impossible.
+    ac = s.get("all_clears", {}).get("value")
+    if ac is not None:
+        pv = s.get("pieces_placed", {}).get("value")
+        sv = s.get("spp", {}).get("value")
+        if (pv is not None and pv < 5) or (sv is not None and sv < 50):
+            s["all_clears"]["value"] = 0
 
     # Time-based calculations are only reliable when the time source is
     # itself reliable (direct OCR → high conf).  Using a fallback time
@@ -765,20 +819,32 @@ def extract_stats(image_path: str | Path) -> dict[str, Any]:
         else:
             _set_result(result, "inputs", None, "missing")
 
-    # ── SCORE (left) ──
-    if left_score_anchor:
-        val_line = _value_below(lines, left_score_anchor)
-        if val_line:
-            score_val = _parse_number(val_line["text"])
-            _set_result(result, "score", score_val, "high" if score_val is not None else "missing")
-
     # ── SCORE (bottom-right) + SPP ──
     if right_score_anchor:
         val_line = _value_below(lines, right_score_anchor)
         if val_line:
             if result["stats"].get("score", {}).get("value") is None:
                 score_val = _parse_number(val_line["text"])
+                # If the initial value is tiny (likely wrong label association),
+                # try the next line below
+                if score_val is not None and score_val < 1000:
+                    next_line = _value_below(lines, val_line, max_dist=120)
+                    if next_line and next_line["top"] != val_line["top"]:
+                        next_val = _parse_number(next_line["text"])
+                        if next_val is not None and next_val >= 1000:
+                            score_val = next_val
+                            val_line = next_line
                 _set_result(result, "score", score_val, "high" if score_val else "missing")
+
+    # ── SCORE (left) ── fallback: use when right score is missing or suspicious (<1000)
+    if left_score_anchor:
+        curr_val = result["stats"].get("score", {}).get("value") if result["stats"].get("score") else None
+        if curr_val is None or (isinstance(curr_val, (int, float)) and curr_val < 1000):
+            val_line = _value_below(lines, left_score_anchor)
+            if val_line:
+                score_val = _parse_number(val_line["text"])
+                if score_val is not None:
+                    _set_result(result, "score", score_val, "high")
 
             # SPP is on the same line: e.g. "22,403, 773/P"
             # Use high max_val since SPP can be hundreds or thousands

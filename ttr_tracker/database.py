@@ -595,8 +595,13 @@ class Database:
         entries.sort(key=lambda e: e["timestamp"], reverse=True)
         return entries[:limit]
 
-    def get_all_misdrop_data(self, gamemode: str = "blitz") -> tuple[list[dict], list[dict]]:
-        """Return (full_replays, partial_runs) for survival analysis."""
+    def get_all_misdrop_data(self, gamemode: str = "blitz",
+                             start_date: Optional[datetime] = None,
+                             end_date: Optional[datetime] = None) -> tuple[list[dict], list[dict]]:
+        """Return (full_replays, partial_runs) for survival analysis.
+
+        If start_date/end_date are provided, only entries within that range are returned.
+        """
         full: list[dict] = []
         partial: list[dict] = []
         with self.session() as sess:
@@ -604,8 +609,13 @@ class Database:
                 sess.query(StatsRow, ReplayRow)
                 .join(ReplayRow, ReplayRow.id == StatsRow.replay_id)
                 .filter(ReplayRow.gamemode == gamemode)
-                .all()
             )
+            if start_date:
+                replay_q = replay_q.filter(ReplayRow.timestamp >= start_date)
+            if end_date:
+                replay_q = replay_q.filter(ReplayRow.timestamp <= end_date)
+            replay_q = replay_q.all()
+
             for st, rp in replay_q:
                 full.append({
                     "score": st.score or 0,
@@ -613,7 +623,13 @@ class Database:
                     "time": (st.final_time or 0) / 1000,
                     "timestamp": rp.timestamp,
                 })
-            for pr in sess.query(PartialRunRow).filter(PartialRunRow.gamemode == gamemode).all():
+
+            partial_q = sess.query(PartialRunRow).filter(PartialRunRow.gamemode == gamemode)
+            if start_date:
+                partial_q = partial_q.filter(PartialRunRow.timestamp >= start_date)
+            if end_date:
+                partial_q = partial_q.filter(PartialRunRow.timestamp <= end_date)
+            for pr in partial_q.all():
                 partial.append({
                     "score": pr.score,
                     "pieces": pr.pieces_placed,
