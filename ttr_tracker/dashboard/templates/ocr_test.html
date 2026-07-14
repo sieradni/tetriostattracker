@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Add Partial Run — Tetrio Stats Tracker</title>
+    <title>OCR Accuracy Test — Tetrio Stats Tracker</title>
     <style>
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f12; color: #e0e0e0; min-height: 100vh; }
@@ -54,11 +54,16 @@
         <a href="/blitz">Blitz Stats</a>
         <a href="/sessions">Sessions</a>
         <a href="/replays">Replays</a>
-        <a href="/ocr-test">OCR Test</a>
+        <a href="/ocr-test" class="active">OCR Test</a>
         <a href="/matches">Matches</a>
     </nav>
     <div class="container">
-        <h1 style="margin-bottom:1rem;font-size:1.3rem;">Add Partial Run</h1>
+        <h1 style="margin-bottom:0.25rem;font-size:1.3rem;">OCR Accuracy Test</h1>
+        <p style="color:#888;font-size:0.85rem;margin-bottom:1rem;">
+            Upload a screenshot, verify/correct the OCR output, then save.
+            The image will be stored in <code>test_images/</code> alongside the verified data
+            for automated accuracy testing.
+        </p>
 
         <div class="drop-zone" id="ocrDropZone">
             <div class="icon">&#128247;</div>
@@ -131,13 +136,14 @@
                 <textarea id="notes" rows="3" placeholder="Any additional context about this run..."></textarea>
             </div>
 
-            <button onclick="submitPartialRun()" style="margin-right:0.5rem;">Save Partial Run</button>
+            <button onclick="submitTestRun()" style="margin-right:0.5rem;">Save to Test Dataset</button>
             <button type="button" onclick="clearForm()" style="background:#2a2a35;color:#aaa;">Clear</button>
         </form>
     </div>
 
     <script>
-    // ── OCR Upload ────────────────────────────────────────────────────
+    let uploadedFile = null;
+
     const ocrDrop = document.getElementById('ocrDropZone');
     const ocrInput = document.getElementById('ocrInput');
     const ocrStatus = document.getElementById('ocrStatus');
@@ -147,7 +153,6 @@
     ocrDrop.addEventListener('dragleave', () => ocrDrop.classList.remove('drag-over'));
     ocrDrop.addEventListener('drop', e => { e.preventDefault(); ocrDrop.classList.remove('drag-over'); if (e.dataTransfer.files.length) runOcr(e.dataTransfer.files[0]); });
 
-    // Paste from clipboard
     document.addEventListener('paste', function(e) {
         const items = e.clipboardData && e.clipboardData.items;
         if (!items) return;
@@ -180,6 +185,7 @@
     }
 
     async function runOcr(file) {
+        uploadedFile = file;
         ocrStatus.innerHTML = '<div class="success">Processing screenshot...</div>';
         const formData = new FormData();
         formData.append('file', file);
@@ -219,12 +225,12 @@
         }
     }
 
-    // ── Clear form ────────────────────────────────────────────────────
     function clearForm() {
         document.getElementById('partialForm').reset();
         document.getElementById('runTimestamp').value = new Date().toISOString().slice(0, 16);
         document.getElementById('status').innerHTML = '';
         document.getElementById('ocrStatus').innerHTML = '';
+        uploadedFile = null;
         ['score','pieces','pps','inputs','kpp','spp','allClears','timeLeft'].forEach(id => {
             const inp = document.getElementById(id);
             if (inp) inp.className = '';
@@ -235,30 +241,36 @@
         });
     }
 
-    // ── Submit ────────────────────────────────────────────────────────
-    async function submitPartialRun() {
+    async function submitTestRun() {
         const status = document.getElementById('status');
-        const data = new URLSearchParams();
-
         const ts = document.getElementById('runTimestamp').value;
         if (!ts) { status.innerHTML = '<div class="error">Timestamp is required</div>'; return; }
-        data.set('timestamp', new Date(ts).toISOString());
-        data.set('score', document.getElementById('score').value);
-        data.set('pieces', document.getElementById('pieces').value);
-        data.set('pps', document.getElementById('pps').value);
-        data.set('inputs', document.getElementById('inputs').value);
-        data.set('kpp', document.getElementById('kpp').value);
-        data.set('spp', document.getElementById('spp').value);
-        data.set('all_clears', document.getElementById('allClears').value);
-        data.set('time_left', document.getElementById('timeLeft').value);
-        data.set('notes', document.getElementById('notes').value || '');
+
+        if (!uploadedFile) {
+            status.innerHTML = '<div class="error">Please upload a screenshot first</div>';
+            return;
+        }
+
+        const formData = new FormData();
+        formData.append('image', uploadedFile);
+        formData.append('timestamp', new Date(ts).toISOString());
+        formData.append('score', document.getElementById('score').value);
+        formData.append('pieces', document.getElementById('pieces').value);
+        formData.append('pps', document.getElementById('pps').value);
+        formData.append('inputs', document.getElementById('inputs').value);
+        formData.append('kpp', document.getElementById('kpp').value);
+        formData.append('spp', document.getElementById('spp').value);
+        formData.append('all_clears', document.getElementById('allClears').value);
+        formData.append('time_left', document.getElementById('timeLeft').value);
+        formData.append('notes', document.getElementById('notes').value || '');
 
         status.innerHTML = '<div class="success">Saving...</div>';
         try {
-            const r = await fetch('/api/partial-runs', { method: 'POST', body: data });
+            const r = await fetch('/api/ocr-test/save', { method: 'POST', body: formData });
             const result = await r.json();
             if (result.status === 'ok') {
-                status.innerHTML = '<div class="success">Saved! <a href="/replays/partial-' + result.id + '">View run</a></div>';
+                status.innerHTML = '<div class="success">Saved! Image stored as <code>' + result.image_filename + '</code>. ' +
+                    '<a href="/replays/partial-' + result.id + '">View run</a></div>';
                 clearForm();
             } else {
                 status.innerHTML = '<div class="error">Error: ' + (result.error || 'unknown') + '</div>';
@@ -268,7 +280,6 @@
         }
     }
 
-    // ── Check OCR availability ───────────────────────────────────────
     fetch('/api/ocr/status').then(r => r.json()).then(s => {
         if (!s.available) {
             const zone = document.getElementById('ocrDropZone');

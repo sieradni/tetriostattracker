@@ -92,6 +92,11 @@ async def partial_runs_page():
     return serve_html("partial_runs.html")
 
 
+@app.get("/ocr-test", response_class=HTMLResponse)
+async def ocr_test_page():
+    return serve_html("ocr_test.html")
+
+
 @app.get("/blitz", response_class=HTMLResponse)
 async def blitz_stats_page():
     return serve_html("blitz_stats.html")
@@ -226,6 +231,55 @@ async def api_create_partial_run(
         notes=notes,
     )
     return {"id": rid, "status": "ok"}
+
+
+@app.post("/api/ocr-test/save")
+async def api_ocr_test_save(
+    image: UploadFile = File(...),
+    timestamp: str = Form(...),
+    score: int = Form(...),
+    pieces: int = Form(...),
+    pps: float = Form(...),
+    inputs: int = Form(...),
+    kpp: float = Form(...),
+    spp: float = Form(...),
+    all_clears: int = Form(...),
+    time_left: float = Form(...),
+    notes: Optional[str] = Form(None),
+):
+    try:
+        ts = datetime.fromisoformat(timestamp)
+    except Exception:
+        return JSONResponse({"error": "invalid timestamp"}, status_code=400)
+
+    computed = _compute_partial_fields(score, pieces, pps, inputs, kpp, spp, all_clears, time_left)
+    rid = db.insert_partial_run(
+        timestamp=ts,
+        gamemode="blitz",
+        score=score,
+        pieces_placed=pieces,
+        pps=pps,
+        inputs=inputs,
+        kpp=kpp,
+        spp=spp,
+        all_clears=all_clears,
+        time_left=time_left,
+        time_elapsed=computed["time_elapsed"],
+        kps=computed["kps"],
+        notes=notes,
+    )
+
+    test_images_dir = BASE_DIR / "test_images"
+    test_images_dir.mkdir(parents=True, exist_ok=True)
+    image_ext = Path(image.filename or "screenshot.png").suffix
+    image_filename = f"ocr_test_{rid}_{score}_{pieces}{image_ext}"
+    image_path = test_images_dir / image_filename
+    content = await image.read()
+    image_path.write_bytes(content)
+
+    db.update_partial_run(rid, source_image=str(image_path))
+
+    return {"id": rid, "status": "ok", "image_filename": image_filename}
 
 
 @app.get("/api/partial-runs")

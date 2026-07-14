@@ -40,6 +40,7 @@
         <a href="/blitz" class="active">Blitz Stats</a>
         <a href="/sessions">Sessions</a>
         <a href="/replays">Replays</a>
+        <a href="/ocr-test">OCR Test</a>
         <a href="/matches">Matches</a>
     </nav>
     <div class="container">
@@ -109,19 +110,15 @@
             return;
         }
 
-        const labels = curveData.map(d => d.time);
-        const survival = curveData.map(d => d.survival);
-        const ciUpper = curveData.map(d => Math.min(1, d.survival + 1.96 * d.std_err));
-        const ciLower = curveData.map(d => Math.max(0, d.survival - 1.96 * d.std_err));
+        const fmt = fmtFn || (v => v);
 
         new Chart(canvas, {
             type: 'line',
             data: {
-                labels: labels.map(fmtFn ? fmtFn : v => v),
                 datasets: [
                     {
                         label: '95% CI',
-                        data: ciUpper,
+                        data: curveData.map(d => ({x: d.time, y: Math.min(1, d.survival + 1.96 * d.std_err)})),
                         borderColor: 'transparent',
                         backgroundColor: COLORS.ci,
                         pointRadius: 0,
@@ -129,7 +126,7 @@
                     },
                     {
                         label: label,
-                        data: survival,
+                        data: curveData.map(d => ({x: d.time, y: d.survival})),
                         borderColor: COLORS.curve,
                         backgroundColor: COLORS.curve + '22',
                         fill: false,
@@ -143,8 +140,9 @@
                 responsive: true, maintainAspectRatio: false,
                 scales: {
                     x: {
+                        type: 'linear',
                         title: { display: true, text: xLabel, color: '#888' },
-                        ticks: { color: '#888' },
+                        ticks: { color: '#888', callback: v => fmt(v) },
                         grid: { color: '#2a2a3522' },
                     },
                     y: {
@@ -158,6 +156,7 @@
                     legend: { labels: { color: '#aaa', boxWidth: 12 } },
                     tooltip: {
                         callbacks: {
+                            title: ctx => fmt(ctx[0].parsed.x),
                             label: ctx => {
                                 if (ctx.dataset.label === '95% CI') return null;
                                 return `Survival: ${(ctx.parsed.y * 100).toFixed(1)}%`;
