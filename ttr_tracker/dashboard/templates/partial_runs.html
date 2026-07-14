@@ -11,23 +11,38 @@
         nav a { color: #a0a0b0; text-decoration: none; font-size: 0.9rem; font-weight: 500; padding: 0.3rem 0; border-bottom: 2px solid transparent; }
         nav a:hover, nav a.active { color: #fff; border-bottom-color: #6c5ce7; }
         nav .brand { color: #fff; font-weight: 700; font-size: 1.05rem; margin-right: auto; letter-spacing: 0.3px; }
-        nav select { background: #2a2a35; color: #e0e0e0; border: 1px solid #3a3a45; border-radius: 4px; padding: 0.3rem 0.5rem; font-size: 0.8rem; cursor: pointer; outline: none; }
-        nav select:hover { border-color: #6c5ce7; }
         .container { max-width: 800px; margin: 0 auto; padding: 1.5rem; }
         .card { background: #1a1a22; border: 1px solid #2a2a35; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
         .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; color: #6c5ce7; margin-bottom: 0.75rem; }
         label { display: block; font-size: 0.8rem; color: #888; margin-bottom: 0.25rem; }
         input, textarea { width: 100%; padding: 0.5rem; background: #0f0f12; border: 1px solid #2a2a35; border-radius: 4px; color: #e0e0e0; font-size: 0.9rem; margin-bottom: 0.75rem; outline: none; }
         input:focus, textarea:focus { border-color: #6c5ce7; }
+        input.ocr-high { border-color: #00b89444; }
+        input.ocr-med { border-color: #fdcb6e66; }
+        input.ocr-missing { border-color: #d6303144; }
         .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
         button { background: #6c5ce7; color: #fff; border: none; border-radius: 4px; padding: 0.6rem 1.5rem; font-size: 0.9rem; cursor: pointer; font-weight: 600; }
         button:hover { background: #5a4bd1; }
         .error { color: #d63031; font-size: 0.8rem; margin-bottom: 0.5rem; }
         .success { color: #00b894; font-size: 0.8rem; margin-bottom: 0.5rem; }
         .hint { font-size: 0.7rem; color: #555; margin-top: -0.5rem; margin-bottom: 0.75rem; }
-        .ocr-coming { background: #2a2a3522; border: 1px dashed #3a3a45; border-radius: 4px; padding: 1rem; text-align: center; color: #555; font-size: 0.8rem; margin-bottom: 1rem; }
         a { color: #6c5ce7; text-decoration: none; }
         a:hover { text-decoration: underline; }
+        .drop-zone { border: 2px dashed #2a2a35; border-radius: 8px; padding: 2rem; text-align: center; cursor: pointer; transition: 0.15s; margin-bottom: 1rem; }
+        .drop-zone:hover, .drop-zone.drag-over { border-color: #6c5ce7; background: #1a1a22; }
+        .drop-zone .icon { font-size: 2rem; color: #6c5ce7; margin-bottom: 0.5rem; }
+        .drop-zone p { color: #888; font-size: 0.9rem; }
+        .drop-zone .hint { color: #555; font-size: 0.75rem; margin-top: 0.3rem; }
+        .drop-zone input { display: none; }
+        .ocr-badge { display: inline-block; padding: 0.15rem 0.4rem; border-radius: 3px; font-size: 0.6rem; font-weight: 700; margin-left: 0.4rem; text-transform: uppercase; }
+        .ocr-badge.high { background: #00b89422; color: #00b894; border: 1px solid #00b89444; }
+        .ocr-badge.medium { background: #fdcb6e22; color: #fdcb6e; border: 1px solid #fdcb6e44; }
+        .ocr-badge.missing { background: #d6303122; color: #d63031; border: 1px solid #d6303144; }
+        .conf-indicator { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 0.3rem; }
+        .conf-high { background: #00b894; }
+        .conf-med { background: #fdcb6e; }
+        .conf-missing { background: #d63031; }
+        label .conf-label { font-size: 0.7rem; font-weight: 400; }
     </style>
 </head>
 <body>
@@ -43,14 +58,20 @@
     </nav>
     <div class="container">
         <h1 style="margin-bottom:1rem;font-size:1.3rem;">Add Partial Run</h1>
-        <p style="color:#888;font-size:0.85rem;margin-bottom:1rem;">
-            Enter stats from a screenshot taken immediately after a misdrop.
-            All blitz runs are assumed to be 120s. Fields marked <span style="color:#d63031;">*</span> are required.
-        </p>
 
-        <div class="ocr-coming">
-            Screenshot OCR upload coming soon. Manual entry only for now.
+        <div class="drop-zone" id="ocrDropZone">
+            <div class="icon">&#128247;</div>
+            <p>Drop or paste a screenshot to auto-extract stats</p>
+            <div class="hint">click to browse, Ctrl+V to paste. Supports PNG, JPG</div>
+            <input type="file" id="ocrInput" accept="image/png,image/jpeg">
         </div>
+        <div id="ocrStatus"></div>
+
+        <p style="color:#888;font-size:0.85rem;margin-bottom:1rem;">
+            Fields marked <span style="color:#d63031;">*</span> are required.
+            All blitz runs are assumed to be 120s.
+            <span style="color:#555;">OCR values can be edited after pre-fill.</span>
+        </p>
 
         <div id="status"></div>
 
@@ -62,46 +83,46 @@
 
                 <div class="form-row">
                     <div>
-                        <label>Score <span style="color:#d63031;">*</span></label>
+                        <label id="lbl-score">Score <span style="color:#d63031;">*</span></label>
                         <input type="number" id="score" min="0" required>
                     </div>
                     <div>
-                        <label>Pieces Placed <span style="color:#d63031;">*</span></label>
+                        <label id="lbl-pieces">Pieces Placed <span style="color:#d63031;">*</span></label>
                         <input type="number" id="pieces" min="0" required>
                     </div>
                 </div>
 
                 <div class="form-row">
                     <div>
-                        <label>PPS <span style="color:#d63031;">*</span></label>
+                        <label id="lbl-pps">PPS <span style="color:#d63031;">*</span></label>
                         <input type="number" id="pps" min="0" step="0.01" required>
                     </div>
                     <div>
-                        <label>Inputs <span style="color:#d63031;">*</span></label>
+                        <label id="lbl-inputs">Inputs <span style="color:#d63031;">*</span></label>
                         <input type="number" id="inputs" min="0" required>
                     </div>
                 </div>
 
                 <div class="form-row">
                     <div>
-                        <label>Inputs / Piece (KPP) <span style="color:#d63031;">*</span></label>
+                        <label id="lbl-kpp">Inputs / Piece (KPP) <span style="color:#d63031;">*</span></label>
                         <input type="number" id="kpp" min="0" step="0.01" required>
                     </div>
                     <div>
-                        <label>Score / Piece (SPP) <span style="color:#d63031;">*</span></label>
+                        <label id="lbl-spp">Score / Piece (SPP) <span style="color:#d63031;">*</span></label>
                         <input type="number" id="spp" min="0" step="0.1" required>
                     </div>
                 </div>
 
                 <div class="form-row">
                     <div>
-                        <label>All Clears <span style="color:#d63031;">*</span></label>
+                        <label id="lbl-allClears">All Clears <span style="color:#d63031;">*</span></label>
                         <input type="number" id="allClears" min="0" required>
                     </div>
                     <div>
-                        <label>Time Left (seconds) <span style="color:#d63031;">*</span></label>
+                        <label id="lbl-timeLeft">Time Left (seconds) <span style="color:#d63031;">*</span></label>
                         <input type="number" id="timeLeft" min="0" step="0.1" required>
-                        <div class="hint">Remaining time shown on screenshot (e.g. 45.2)</div>
+                        <div class="hint">e.g. 45.2 for 45.2s remaining</div>
                     </div>
                 </div>
 
@@ -109,14 +130,113 @@
                 <textarea id="notes" rows="3" placeholder="Any additional context about this run..."></textarea>
             </div>
 
-            <button onclick="submitPartialRun()">Save Partial Run</button>
+            <button onclick="submitPartialRun()" style="margin-right:0.5rem;">Save Partial Run</button>
+            <button type="button" onclick="clearForm()" style="background:#2a2a35;color:#aaa;">Clear</button>
         </form>
     </div>
 
     <script>
+    // ── OCR Upload ────────────────────────────────────────────────────
+    const ocrDrop = document.getElementById('ocrDropZone');
+    const ocrInput = document.getElementById('ocrInput');
+    const ocrStatus = document.getElementById('ocrStatus');
+
+    ocrDrop.addEventListener('click', () => ocrInput.click());
+    ocrDrop.addEventListener('dragover', e => { e.preventDefault(); ocrDrop.classList.add('drag-over'); });
+    ocrDrop.addEventListener('dragleave', () => ocrDrop.classList.remove('drag-over'));
+    ocrDrop.addEventListener('drop', e => { e.preventDefault(); ocrDrop.classList.remove('drag-over'); if (e.dataTransfer.files.length) runOcr(e.dataTransfer.files[0]); });
+
+    // Paste from clipboard
+    document.addEventListener('paste', function(e) {
+        const items = e.clipboardData && e.clipboardData.items;
+        if (!items) return;
+        for (let i = 0; i < items.length; i++) {
+            if (items[i].type.indexOf('image') !== -1) {
+                const blob = items[i].getAsFile();
+                if (blob) {
+                    ocrStatus.innerHTML = '<div class="success">Processing pasted screenshot...</div>';
+                    runOcr(blob);
+                }
+                break;
+            }
+        }
+    });
+    ocrInput.addEventListener('change', () => { if (ocrInput.files.length) runOcr(ocrInput.files[0]); ocrInput.value = ''; });
+
+    const CONF_COLORS = { high: '#00b894', medium: '#fdcb6e', missing: '#d63031' };
+
+    function setConf(fieldId, labelId, conf) {
+        const inp = document.getElementById(fieldId);
+        const lbl = document.getElementById(labelId);
+        if (!inp) return;
+        inp.className = 'ocr-' + conf;
+        if (lbl) {
+            const dot = '<span class="conf-indicator conf-' + conf + '"></span>';
+            const txt = lbl.textContent.replace(/<span class="conf-label.*/, '').trim();
+            const name = conf === 'high' ? 'OCR' : conf === 'medium' ? 'Check' : 'Missing';
+            lbl.innerHTML = txt + ' <span class="conf-label" style="font-size:0.7rem;color:' + CONF_COLORS[conf] + ';">(' + name + ')</span>';
+        }
+    }
+
+    async function runOcr(file) {
+        ocrStatus.innerHTML = '<div class="success">Processing screenshot...</div>';
+        const formData = new FormData();
+        formData.append('file', file);
+        try {
+            const r = await fetch('/api/ocr/extract', { method: 'POST', body: formData });
+            if (!r.ok) {
+                const err = await r.json();
+                ocrStatus.innerHTML = '<div class="error">OCR failed: ' + (err.error || 'unknown error') + '</div>';
+                return;
+            }
+            const result = await r.json();
+            const stats = result.stats || {};
+
+            function fill(id, val, conf) {
+                const inp = document.getElementById(id);
+                if (inp && val != null) inp.value = val;
+                const labelId = 'lbl-' + id;
+                setConf(id, labelId, conf || 'missing');
+            }
+
+            fill('score', stats.score ? stats.score.value : null, stats.score ? stats.score.conf : 'missing');
+            fill('pieces', stats.pieces_placed ? stats.pieces_placed.value : null, stats.pieces_placed ? stats.pieces_placed.conf : 'missing');
+            fill('pps', stats.pps ? stats.pps.value : null, stats.pps ? stats.pps.conf : 'missing');
+            fill('inputs', stats.inputs ? stats.inputs.value : null, stats.inputs ? stats.inputs.conf : 'missing');
+            fill('kpp', stats.kpp ? stats.kpp.value : null, stats.kpp ? stats.kpp.conf : 'missing');
+            fill('spp', stats.spp ? stats.spp.value : null, stats.spp ? stats.spp.conf : 'missing');
+            fill('allClears', stats.all_clears ? stats.all_clears.value : null, stats.all_clears ? stats.all_clears.conf : 'missing');
+            fill('timeLeft', stats.time_left ? stats.time_left.value : null, stats.time_left ? stats.time_left.conf : 'missing');
+
+            const missing = Object.values(stats).filter(s => s && s.conf === 'missing').length;
+            const ok = Object.values(stats).filter(s => s && s.conf === 'high').length;
+            ocrStatus.innerHTML = '<div class="success">OCR complete: ' + ok + ' fields extracted' +
+                (missing ? ', ' + missing + ' missing (fill manually below)' : '') +
+                '.</div>';
+        } catch (e) {
+            ocrStatus.innerHTML = '<div class="error">OCR error: ' + e.message + '</div>';
+        }
+    }
+
+    // ── Clear form ────────────────────────────────────────────────────
+    function clearForm() {
+        document.getElementById('partialForm').reset();
+        document.getElementById('runTimestamp').value = new Date().toISOString().slice(0, 16);
+        document.getElementById('status').innerHTML = '';
+        document.getElementById('ocrStatus').innerHTML = '';
+        ['score','pieces','pps','inputs','kpp','spp','allClears','timeLeft'].forEach(id => {
+            const inp = document.getElementById(id);
+            if (inp) inp.className = '';
+        });
+        ['lbl-score','lbl-pieces','lbl-pps','lbl-inputs','lbl-kpp','lbl-spp','lbl-allClears','lbl-timeLeft'].forEach(id => {
+            const lbl = document.getElementById(id);
+            if (lbl) lbl.innerHTML = lbl.textContent.replace(/<span.*/, '').trim();
+        });
+    }
+
+    // ── Submit ────────────────────────────────────────────────────────
     async function submitPartialRun() {
         const status = document.getElementById('status');
-        const form = document.getElementById('partialForm');
         const data = new URLSearchParams();
 
         const ts = document.getElementById('runTimestamp').value;
@@ -137,16 +257,27 @@
             const r = await fetch('/api/partial-runs', { method: 'POST', body: data });
             const result = await r.json();
             if (result.status === 'ok') {
-                status.innerHTML = `<div class="success">Saved! <a href="/replays/partial-${result.id}">View run</a></div>`;
-                form.reset();
-                document.getElementById('runTimestamp').value = new Date().toISOString().slice(0, 16);
+                status.innerHTML = '<div class="success">Saved! <a href="/replays/partial-' + result.id + '">View run</a></div>';
+                clearForm();
             } else {
-                status.innerHTML = `<div class="error">Error: ${result.error || 'unknown'}</div>`;
+                status.innerHTML = '<div class="error">Error: ' + (result.error || 'unknown') + '</div>';
             }
         } catch (e) {
-            status.innerHTML = `<div class="error">Error: ${e.message}</div>`;
+            status.innerHTML = '<div class="error">Error: ' + e.message + '</div>';
         }
     }
+
+    // ── Check OCR availability ───────────────────────────────────────
+    fetch('/api/ocr/status').then(r => r.json()).then(s => {
+        if (!s.available) {
+            const zone = document.getElementById('ocrDropZone');
+            zone.innerHTML = '<div style="font-size:0.9rem;color:#555;">' +
+                'OCR not available — Tesseract not installed.<br>' +
+                '<span style="font-size:0.75rem;">Install from ' +
+                '<a href="https://github.com/UB-Mannheim/tesseract/wiki" target="_blank" style="color:#6c5ce7;">' +
+                'UB-Mannheim/tesseract</a> or enter stats manually below.</span></div>';
+        }
+    }).catch(() => {});
 
     document.getElementById('runTimestamp').value = new Date().toISOString().slice(0, 16);
     </script>

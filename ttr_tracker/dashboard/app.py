@@ -1,5 +1,6 @@
 import json
 import os
+import tempfile
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -10,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 from ttr_tracker.database import Database, ReplayRow, MatchRow
 from ttr_tracker.importer import import_file
+from ttr_tracker.ocr import extract_stats, is_available, TesseractNotAvailableError
 from ttr_tracker.queries import (
     get_blitz_survival,
     get_partial_run_detail,
@@ -274,6 +276,39 @@ async def api_delete_partial_run(run_id: int):
 @app.get("/api/blitz/survival")
 async def api_blitz_survival(gamemode: str = Query("blitz")):
     return get_blitz_survival(db, gamemode)
+
+
+# ── OCR ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/ocr/status")
+async def api_ocr_status():
+    return {"available": is_available()}
+
+
+@app.post("/api/ocr/extract")
+async def api_ocr_extract(file: UploadFile = File(...)):
+    if not is_available():
+        return JSONResponse(
+            {"error": "Tesseract OCR is not installed. Install from https://github.com/UB-Mannheim/tesseract/wiki"},
+            status_code=422,
+        )
+    suffix = Path(file.filename or "screenshot.png").suffix
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as f:
+        content = await file.read()
+        f.write(content)
+        tmp = f.name
+    try:
+        result = extract_stats(tmp)
+        return result
+    except TesseractNotAvailableError as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=422)
+    finally:
+        try:
+            os.unlink(tmp)
+        except Exception:
+            pass
 
 
 # ── Match / League ───────────────────────────────────────────────────────
