@@ -227,7 +227,9 @@
 
     function clearForm() {
         document.getElementById('partialForm').reset();
-        document.getElementById('runTimestamp').value = new Date().toISOString().slice(0, 16);
+        const now = new Date();
+        const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+        document.getElementById('runTimestamp').value = local.toISOString().slice(0, 16);
         document.getElementById('status').innerHTML = '';
         document.getElementById('ocrStatus').innerHTML = '';
         uploadedFile = null;
@@ -291,7 +293,9 @@
         }
     }).catch(() => {});
 
-    document.getElementById('runTimestamp').value = new Date().toISOString().slice(0, 16);
+    const now = new Date();
+    const local = new Date(now.getTime() - now.getTimezoneOffset() * 60000);
+    document.getElementById('runTimestamp').value = local.toISOString().slice(0, 16);
     </script>
 </body>
 </html>

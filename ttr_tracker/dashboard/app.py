@@ -210,7 +210,7 @@ async def api_create_partial_run(
     notes: Optional[str] = Form(None),
 ):
     try:
-        ts = datetime.fromisoformat(timestamp)
+        ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).replace(tzinfo=None)
     except Exception:
         return JSONResponse({"error": "invalid timestamp"}, status_code=400)
 
@@ -248,7 +248,7 @@ async def api_ocr_test_save(
     notes: Optional[str] = Form(None),
 ):
     try:
-        ts = datetime.fromisoformat(timestamp)
+        ts = datetime.fromisoformat(timestamp.replace("Z", "+00:00")).replace(tzinfo=None)
     except Exception:
         return JSONResponse({"error": "invalid timestamp"}, status_code=400)
 

@@ -271,7 +271,102 @@ def _parse_rate(text: str, pattern: re.Pattern, max_val: float = 15.0) -> Option
     return val
 
 
-def _ocr_all_clears_fallback(img: Image.Image, anchor: dict) -> Optional[tuple[int, float]]:
+def _all_clears_value_rect(anchor: dict, img_w: int, img_h: int, proc: Image.Image, scale: float) -> tuple[int, int, int, int]:
+    """Tight bounding box around the all-clears count (returned in image space).
+
+    The count sits directly below the ALL CLEARS label, floated only slightly to
+    the right.  Detection is done in *preprocessed* space (``proc`` / ``anchor``
+    share that space; ``scale = proc.width / img.width``) so it lines up with the
+    detected label.  The box is kept clear of two things that previously caused
+    misreads:
+
+    * the playfield's outer left border on the right — a tall vertical edge that
+      Tesseract reads as a stray stroke / digit.  It sits at roughly
+      ``r + 0.5*label_w``, so we stop well short of it;
+    * the next stat block below — instead of bracketing by the next detected label
+      (fragile when a label is itself missed), we locate the count's own pixels
+      directly below the label and bound to those, so neither the label above nor
+      PIECES/INPUTS below is swept in.
+
+    Returns coordinates in the *original image* space (so callers can crop ``img``).
+    """
+    arr = np.array(proc, dtype=np.uint8)
+    ph, pw = arr.shape
+
+    l, t, r, b = anchor["left"], anchor["top"], anchor["right"], anchor["bottom"]
+    label_w = r - l
+    label_h = b - t
+
+    # Horizontal window: just left of the label, and short of the board border.
+    left = max(0, int((l - int(label_w * 0.2)) / scale))
+    right = min(img_w, int((r + int(label_w * 0.1)) / scale))
+
+    # Vertical: the value's bright block sits directly below the label, in the
+    # board-excluded window.  Group rows into contiguous blocks (gaps > 3px);
+    # the value is the block whose top is at/below the label bottom ``b``.
+    # (A faint vertical remnant can bridge the gap and fuse label+value into
+    # one block — that merged case is handled by the else branch below.)
+    y0p = max(0, int(b - label_h * 0.9))
+    sub = arr[
+        y0p:min(ph, int(b + label_h * 3) + 6),
+        max(0, int(l - label_w * 0.2)):min(pw, int(r + label_w * 0.1)),
+    ]
+    ys, xs = np.where(sub > 127)
+    pad = max(4, int(label_h * 0.45))
+    if xs.size > 0:
+        bright_rows = sorted({int(y) for y in ys})
+        blocks = []
+        bs = bright_rows[0]
+        be = bright_rows[0]
+        for yr in bright_rows[1:]:
+            if yr - be <= 3:
+                be = yr
+            else:
+                blocks.append((bs, be))
+                bs = yr
+                be = yr
+        blocks.append((bs, be))
+        cand = [blk for blk in blocks if (y0p + blk[1]) < b + label_h * 3]
+        val_blks = [blk for blk in cand if (y0p + blk[0]) > b - label_h * 0.2]
+        if val_blks:
+            val = val_blks[-1]
+            top = max(0, int((y0p + val[0] - pad) / scale))
+            bottom_proc = y0p + val[1]
+        else:
+            # Label+value fused (a faint vertical remnant bridges the gap,
+            # fusing them into one block).  Drop near-isolated pixels
+            # (the bridge is a single-pixel column) and take the first
+            # bright block *below* the label as the value, so "ALL CLEARS"
+            # is excluded and the value is bounded to its own top.
+            from collections import Counter as _Counter
+            _rc = _Counter(int(y) for y in ys)
+            _keep = np.array([_rc[int(y)] >= 3 for y in ys], dtype=bool)
+            _ys = ys[_keep]
+            _below = (y0p + _ys) >= b
+            _ys = _ys[_below]
+            if _ys.size > 0:
+                _rows = sorted({int(y) for y in _ys})
+                _bs = _rows[0]; _be = _rows[0]
+                for _yr in _rows[1:]:
+                    if _yr - _be <= 3:
+                        _be = _yr
+                    else:
+                        _bs = _yr; _be = _yr
+                val = (_bs, _be)
+                top = max(0, int((y0p + val[0] - pad) / scale))
+                bottom_proc = y0p + val[1]
+            else:
+                val = cand[-1] if cand else blocks[-1]
+                top = max(0, int(b / scale))
+                bottom_proc = y0p + val[1]
+        bottom = min(img_h, int((bottom_proc + pad) / scale))
+    else:
+        top = max(0, int((b - int(label_h * 0.5)) / scale))
+        bottom = min(img_h, int((b + int(label_h * 2) + 4) / scale))
+    return (left, top, right, bottom)
+
+
+def _ocr_all_clears_fallback(img: Image.Image, anchor: dict, lines: list[dict], preprocessed: Optional[Image.Image] = None) -> Optional[tuple[int, float]]:
     """Tight re-OCR of the all-clears count, directly below & right of label.
 
     The count is a clean, small number rendered just *below* the ``ALL CLEARS``
@@ -289,19 +384,17 @@ def _ocr_all_clears_fallback(img: Image.Image, anchor: dict) -> Optional[tuple[i
     """
     from collections import Counter
 
+    proc = preprocessed if preprocessed is not None else preprocess_image(img)
+    scale = proc.width / img.width
+
     l, t, r, b = anchor["left"], anchor["top"], anchor["right"], anchor["bottom"]
     label_w = r - l
     label_h = b - t
 
-    # Narrow first (floated right, directly below), then wider (catches counts
-    # rendered further right).  The narrow band is what keeps neighbour stats
-    # out; the wide band is a fallback for when the count sits further right.
-    crops = [
-        (max(0, r - label_w // 2), b + 2, min(img.width, r + label_w),
-         min(img.height, b + int(label_h * 2) + 4)),
-        (max(0, l + label_w // 4), b + 2, min(img.width, r + 2 * label_w),
-         min(img.height, b + int(label_w * 0.9))),
-    ]
+    # Two views of the same board-excluded region (the helper already pads
+    # generously and isolates the value block from the next stat line).
+    rect = _all_clears_value_rect(anchor, img.width, img.height, proc, scale)
+    crops = [rect, rect]
 
     letter_map = {"I": "1", "l": "1", "|": "1", "O": "0", "Q": "0", "G": "9", "g": "9"}
 
@@ -312,6 +405,7 @@ def _ocr_all_clears_fallback(img: Image.Image, anchor: dict) -> Optional[tuple[i
         w, h = crop.size
         scale = max(4.0, 600 / w)
         big = crop.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        big_h = big.height
         arr = np.array(big.convert("L"))
         bases = [255 - arr]
         for thr in (40, 60):
@@ -334,11 +428,9 @@ def _ocr_all_clears_fallback(img: Image.Image, anchor: dict) -> Optional[tuple[i
                     txt = data["text"][i].strip()
                     if not txt:
                         continue
-                    # The count sits on the line *directly* below the label, so
-                    # only consider the top line of the crop (lower lines hold
-                    # the neighbouring PIECES/INPUTS blocks).
-                    if data["top"][i] > h * 0.55:
-                        continue
+                    # The crop is already bounded to the value only, so any
+                    # recognised text is the count.  (``data["top"]`` is in
+                    # the *upscaled* image's coordinates, hence big_h.)
                     top_line_has_text = True
                     mapped = "".join(letter_map.get(ch.upper(), ch) for ch in txt)
                     if mapped.isdigit() and len(mapped) <= 2:
@@ -348,9 +440,6 @@ def _ocr_all_clears_fallback(img: Image.Image, anchor: dict) -> Optional[tuple[i
             counts = Counter(reads)
             best_num, best_count = counts.most_common(1)[0]
             return best_num, best_count / len(reads)
-        # Top line holds a label (e.g. PIECES) but no count → all-clears is 0.
-        if top_line_has_text:
-            return 0, 1.0
     return None
 
 
@@ -384,17 +473,20 @@ def _find_all_clears_value(img: Image.Image, lines: list[dict], all_clears_ancho
     if candidates:
         return min(candidates, key=lambda c: abs(c[1]["top"] - all_clears_anchor["top"]))[0]
 
-    broad = _focused_number_near_label(img, all_clears_anchor, preprocessed=preprocessed)
-    region = _ocr_all_clears_fallback(img, all_clears_anchor)
+    broad = _focused_number_near_label(img, all_clears_anchor, preprocessed=preprocessed, lines=lines)
+    region = _ocr_all_clears_fallback(img, all_clears_anchor, lines, preprocessed=preprocessed)
+    # Prefer the tight fallback: it crops *only* the value (board-excluded and
+    # label-excluded) and reads it with whitelist PSMs, so it is far less
+    # prone to stray-line / over-read errors than the loose broad region
+    # (which can sweep in neighbouring digits or read the playfield edge).
+    # The broad reader is only a last resort when the tight crop finds nothing.
     if region is not None:
         region_num, frac = region
-        # Only let a *single-digit* region override the broad read: multi-digit
-        # region results are almost always a neighbouring stat swept into the
-        # crop, not the all-clears count.  The override also requires strong
-        # agreement across configs.
-        if 0 <= region_num <= 9 and frac >= 0.7 and (broad is None or region_num != broad):
+        if 0 <= region_num <= 20 and frac >= 0.5:
             return region_num
-    return broad
+    if broad is not None:
+        return broad
+    return None
 
 
 def _focused_rate_right(img: Image.Image, val_line: dict, pattern: re.Pattern, max_val: float) -> Optional[float]:
@@ -492,7 +584,7 @@ def _parse_digit_ocr(txt: str) -> Optional[int]:
     return None
 
 
-def _focused_number_near_label(img: Image.Image, label_anchor: dict, preprocessed: Optional[Image.Image] = None) -> Optional[int]:
+def _focused_number_near_label(img: Image.Image, label_anchor: dict, preprocessed: Optional[Image.Image] = None, lines: Optional[list[dict]] = None) -> Optional[int]:
     """Crop region near label (both above and below), upscale, re-OCR
     for a small digit value.
 
@@ -505,6 +597,13 @@ def _focused_number_near_label(img: Image.Image, label_anchor: dict, preprocesse
     label_w = label_anchor["right"] - label_anchor["left"]
     label_mid = (label_anchor["left"] + label_anchor["right"]) // 2
 
+    # The broad reader keeps its loose, context-rich vertical extent (this is
+    # what reads id=35's "1" correctly), but we cap the right edge at
+    # the board-excluded bound so it never reads the playfield border
+    # (which otherwise comes out as "7" for id=38).  The tight
+    # value-only geometry lives only in the *fallback* path.
+    brect = _all_clears_value_rect(label_anchor, img_w, img_h,
+                                 preprocess_image(img), img.width / img.width)
     sources = [gray]
     if preprocessed is not None:
         sources.append(preprocessed)
@@ -515,22 +614,19 @@ def _focused_number_near_label(img: Image.Image, label_anchor: dict, preprocesse
         bright = Image.fromarray((bright_mask.astype(np.uint8) * 255), mode="L")
         sources.append(bright)
 
-    label_w = label_anchor["right"] - label_anchor["left"]
-    label_mid = (label_anchor["left"] + label_anchor["right"]) // 2
-
     regions = [
-        # Directly below the label
+        # Directly below the label (board-excluded right edge)
         (
             max(0, label_anchor["left"] - 5),
             label_anchor["bottom"] + 2,
-            min(img_w, label_anchor["right"] + label_w),
+            brect[2],
             min(img_h, label_anchor["bottom"] + int(label_w * 0.6)),
         ),
-        # Below and slightly right
+        # Below and slightly right (board-excluded right edge)
         (
             max(0, label_anchor["left"] + label_w // 4),
             label_anchor["bottom"] + 2,
-            min(img_w, label_anchor["right"] + int(label_w * 1.3)),
+            brect[2],
             min(img_h, label_anchor["bottom"] + int(label_w * 0.7)),
         ),
     ]
@@ -556,15 +652,16 @@ def _focused_number_near_label(img: Image.Image, label_anchor: dict, preprocesse
                 continue
             crop = src.crop((left, top, right, bottom))
             w, h = crop.size
-            scale = max(3.0, 600 / w)
-            big = crop.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+            upscale = max(3.0, 600 / w)
+            big = crop.resize((int(w * upscale), int(h * upscale)), Image.LANCZOS)
             arr = np.array(big, dtype=np.uint8)
 
             inv = Image.fromarray((255 - arr).astype(np.uint8), mode="L")
             for cfg in [
+                "--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789",
+                "--psm 7 --oem 3 -c tessedit_char_whitelist=0123456789",
                 "--psm 8 --oem 3 -c tessedit_char_whitelist=0123456789",
-                "--psm 8 --oem 3",
-                "--psm 7 --oem 3",
+                "--psm 11 --oem 3 -c tessedit_char_whitelist=0123456789",
             ]:
                 data = pytesseract.image_to_data(
                     inv, output_type=pytesseract.Output.DICT, config=cfg,
@@ -584,9 +681,10 @@ def _focused_number_near_label(img: Image.Image, label_anchor: dict, preprocesse
                 thr_arr = np.where((255 - arr) > thr_val, 255, 0).astype(np.uint8)
                 thr_img = Image.fromarray(thr_arr, mode="L")
                 for cfg in [
+                    "--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789",
+                    "--psm 7 --oem 3 -c tessedit_char_whitelist=0123456789",
                     "--psm 8 --oem 3 -c tessedit_char_whitelist=0123456789",
-                    "--psm 8 --oem 3",
-                    "--psm 7 --oem 3",
+                    "--psm 11 --oem 3 -c tessedit_char_whitelist=0123456789",
                 ]:
                     data = pytesseract.image_to_data(
                         thr_img, output_type=pytesseract.Output.DICT, config=cfg,
