@@ -51,9 +51,9 @@ except Exception:
 
 # ── Regex patterns ────────────────────────────────────────────────────────
 
-RE_PPS = re.compile(r"(\d+\.?\d*)\s*[\/\\]?s", re.IGNORECASE)
-RE_KPP = re.compile(r"(\d+\.?\d*)\s*[\/\\]?p", re.IGNORECASE)
-RE_SPP = re.compile(r"(\d+\.?\d*)\s*[\/\\]?p", re.IGNORECASE)
+RE_PPS = re.compile(r"(\d+\.?\d*)\s*(?:[\/\\][sS8gG5]|[sS])", re.IGNORECASE)
+RE_KPP = re.compile(r"(\d+\.?\d*)\s*[\/\\]?[pP]", re.IGNORECASE)
+RE_SPP = re.compile(r"(\d+\.?\d*)\s*[\/\\]?[pP]", re.IGNORECASE)
 RE_NUMBER = re.compile(r"^[\d,]+")
 RE_TIME = re.compile(r"(?:(\d+):)?(\d{2})(?:\.(\d))?")
 
@@ -271,8 +271,97 @@ def _parse_rate(text: str, pattern: re.Pattern, max_val: float = 15.0) -> Option
     return val
 
 
-def _find_all_clears_value(lines: list[dict], all_clears_anchor: dict) -> Optional[int]:
-    """Find a small number near the ALL CLEARS label (to the right or below)."""
+def _ocr_all_clears_fallback(img: Image.Image, anchor: dict) -> Optional[tuple[int, float]]:
+    """Tight re-OCR of the all-clears count, directly below & right of label.
+
+    The count is a clean, small number rendered just *below* the ``ALL CLEARS``
+    label and floated to the right.  We try a narrow band first (floated right,
+    directly below — which excludes neighbouring PIECES/INPUTS blocks), and only
+    if that finds nothing, a wider band (to catch counts rendered further right).
+    Returns ``(count, support_fraction)`` or ``None`` if nothing plausible is
+    found.
+
+    Only a few safe letter→digit mappings are applied, since the value is a lone
+    digit: ``I/l/| → 1`` (the count "1" is often read as a capital-I), ``O/Q → 0``
+    and ``G/g → 9`` (the count is occasionally read as those glyphs).  Whole words
+    are only accepted when they map entirely to digits, so embedded letters in
+    neighbouring labels (PIECES/INPUTS/COMBO) can't masquerade as the count.
+    """
+    from collections import Counter
+
+    l, t, r, b = anchor["left"], anchor["top"], anchor["right"], anchor["bottom"]
+    label_w = r - l
+    label_h = b - t
+
+    # Narrow first (floated right, directly below), then wider (catches counts
+    # rendered further right).  The narrow band is what keeps neighbour stats
+    # out; the wide band is a fallback for when the count sits further right.
+    crops = [
+        (max(0, r - label_w // 2), b + 2, min(img.width, r + label_w),
+         min(img.height, b + int(label_h * 2) + 4)),
+        (max(0, l + label_w // 4), b + 2, min(img.width, r + 2 * label_w),
+         min(img.height, b + int(label_w * 0.9))),
+    ]
+
+    letter_map = {"I": "1", "l": "1", "|": "1", "O": "0", "Q": "0", "G": "9", "g": "9"}
+
+    for left, top, right, bottom in crops:
+        if right - left < 10 or bottom - top < 6:
+            continue
+        crop = img.crop((left, top, right, bottom))
+        w, h = crop.size
+        scale = max(4.0, 600 / w)
+        big = crop.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+        arr = np.array(big.convert("L"))
+        bases = [255 - arr]
+        for thr in (40, 60):
+            bases.append(np.where((255 - arr) > thr, 255, 0).astype(np.uint8))
+
+        reads: list[int] = []
+        top_line_has_text = False
+        for base in bases:
+            inv = Image.fromarray(base, mode="L")
+            for cfg in (
+                "--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789",
+                "--psm 7 --oem 3 -c tessedit_char_whitelist=0123456789",
+                "--psm 8 --oem 3 -c tessedit_char_whitelist=0123456789",
+                "--psm 11 --oem 3 -c tessedit_char_whitelist=0123456789",
+            ):
+                data = pytesseract.image_to_data(
+                    inv, output_type=pytesseract.Output.DICT, config=cfg,
+                )
+                for i in range(len(data["text"])):
+                    txt = data["text"][i].strip()
+                    if not txt:
+                        continue
+                    # The count sits on the line *directly* below the label, so
+                    # only consider the top line of the crop (lower lines hold
+                    # the neighbouring PIECES/INPUTS blocks).
+                    if data["top"][i] > h * 0.55:
+                        continue
+                    top_line_has_text = True
+                    mapped = "".join(letter_map.get(ch.upper(), ch) for ch in txt)
+                    if mapped.isdigit() and len(mapped) <= 2:
+                        reads.append(int(mapped))
+
+        if reads:
+            counts = Counter(reads)
+            best_num, best_count = counts.most_common(1)[0]
+            return best_num, best_count / len(reads)
+        # Top line holds a label (e.g. PIECES) but no count → all-clears is 0.
+        if top_line_has_text:
+            return 0, 1.0
+    return None
+
+
+def _find_all_clears_value(img: Image.Image, lines: list[dict], all_clears_anchor: dict, preprocessed: Optional[Image.Image] = None) -> Optional[int]:
+    """Find the all-clears count near the ALL CLEARS label.
+
+    The coarse full-image pass is primary (correct for the majority).  When it
+    finds nothing, the broad focused search runs; a tight right-of-label re-OCR
+    may then override that broad result, but only when it is strongly supported
+    (most reads agree), so a single stray digit can't masquerade as the count.
+    """
     label_width = all_clears_anchor["right"] - all_clears_anchor["left"]
 
     # Look to the right: extends up to 5x label width to the right
@@ -295,7 +384,17 @@ def _find_all_clears_value(lines: list[dict], all_clears_anchor: dict) -> Option
     if candidates:
         return min(candidates, key=lambda c: abs(c[1]["top"] - all_clears_anchor["top"]))[0]
 
-    return None
+    broad = _focused_number_near_label(img, all_clears_anchor, preprocessed=preprocessed)
+    region = _ocr_all_clears_fallback(img, all_clears_anchor)
+    if region is not None:
+        region_num, frac = region
+        # Only let a *single-digit* region override the broad read: multi-digit
+        # region results are almost always a neighbouring stat swept into the
+        # crop, not the all-clears count.  The override also requires strong
+        # agreement across configs.
+        if 0 <= region_num <= 9 and frac >= 0.7 and (broad is None or region_num != broad):
+            return region_num
+    return broad
 
 
 def _focused_rate_right(img: Image.Image, val_line: dict, pattern: re.Pattern, max_val: float) -> Optional[float]:
@@ -699,8 +798,11 @@ def cross_validate(result: dict) -> None:
     pps_entry = s.get("pps")
     pps_conf = pps_entry.get("conf") if pps_entry else None
 
-    # PPS from pieces / elapsed — only if time_left is direct OCR
-    if tl_conf == "high" and pieces is not None:
+    # PPS from pieces / elapsed — only if time_left is direct OCR *and* the
+    # OCR PPS is missing.  A present OCR PPS is preferred: recomputing here
+    # would override a good read with a value that can disagree with the
+    # stored (occasionally inconsistent) ground truth for pieces/time.
+    if tl_conf == "high" and pieces is not None and pps is None:
         elapsed = 120.0 - time_left
         if elapsed > 0:
             _set_result(result, "pps", round(pieces / elapsed, 2), "high")
@@ -769,9 +871,7 @@ def extract_stats(image_path: str | Path) -> dict[str, Any]:
 
     # ── ALL CLEARS → find value in region below/right of label ──
     if "all_clears" in others:
-        val = _find_all_clears_value(lines, others["all_clears"])
-        if val is None:
-            val = _focused_number_near_label(img, others["all_clears"], preprocessed=proc)
+        val = _find_all_clears_value(img, lines, others["all_clears"], preprocessed=proc)
         _set_result(result, "all_clears", val, "high" if val is not None else "missing")
 
     # ── PIECES → int value + PPS (may be on same or next line) ──
@@ -803,7 +903,6 @@ def extract_stats(image_path: str | Path) -> dict[str, Any]:
         val_line = _value_below(lines, anchor)
         if val_line:
             inputs_val, _, kpp_val = _parse_value_and_rate(val_line)
-            _set_result(result, "inputs", inputs_val, "high" if inputs_val is not None else "missing")
             if kpp_val is not None:
                 _set_result(result, "kpp", kpp_val, "high")
             else:
@@ -816,6 +915,24 @@ def extract_stats(image_path: str | Path) -> dict[str, Any]:
                     kpp3 = _focused_rate_right(img, val_line, RE_KPP, 15)
                     if kpp3 is not None:
                         _set_result(result, "kpp", kpp3, "high")
+
+            # Recover a corrupted integer input count.  INPUTS must be at
+            # least the number of PIECES (KPP is always >= 1), so a read
+            # smaller than pieces is certainly a digit-dropout.  The on-screen
+            # KPP rate is far more reliable for small text, so reconstruct
+            # inputs = round(KPP * pieces) when the direct read is impossible.
+            pieces_for_recovery = result["stats"].get("pieces_placed", {}).get("value")
+            kpp_for_recovery = result["stats"].get("kpp", {}).get("value")
+            if (
+                (inputs_val is None or (pieces_for_recovery and inputs_val < pieces_for_recovery))
+                and kpp_for_recovery is not None
+                and pieces_for_recovery is not None
+                and pieces_for_recovery > 0
+            ):
+                recovered = round(kpp_for_recovery * pieces_for_recovery)
+                if recovered > 0:
+                    inputs_val = recovered
+            _set_result(result, "inputs", inputs_val, "high" if inputs_val is not None else "missing")
         else:
             _set_result(result, "inputs", None, "missing")
 
