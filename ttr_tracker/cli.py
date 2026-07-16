@@ -1,7 +1,10 @@
+import csv
 import os
+from datetime import datetime
 from pathlib import Path
 
 import click
+import uvicorn
 
 from ttr_tracker.database import Database
 from ttr_tracker.importer import import_directory, import_file
@@ -11,6 +14,7 @@ from ttr_tracker.queries import (
     get_summary,
     get_trends,
 )
+from ttr_tracker.stats import compute_kps, compute_time_elapsed
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent / "data" / "tracker.db"
 DEFAULT_REPLAY_DIR = Path(__file__).resolve().parent.parent / "data" / "replays"
@@ -43,11 +47,9 @@ def partial():
 @click.pass_context
 def add_partial(ctx, timestamp, score, pieces, pps, inputs, kpp, spp, all_clears, time_left, notes):
     db: Database = ctx.obj["db"]
-    from datetime import datetime
     ts = datetime.fromisoformat(timestamp)
-    objective_ms = 120000
-    time_elapsed = max(0, objective_ms - time_left * 1000) / 1000
-    kps = inputs / time_elapsed if time_elapsed > 0 else 0.0
+    time_elapsed = compute_time_elapsed(time_left)
+    kps = compute_kps(inputs, time_elapsed)
     rid = db.insert_partial_run(
         timestamp=ts, gamemode="blitz",
         score=score, pieces_placed=pieces, pps=pps, inputs=inputs,
@@ -177,7 +179,6 @@ def serve(ctx: click.Context, port: int, host: str) -> None:
     click.echo(f"Database: {db_path}")
 
     os.environ["TTR_DB_PATH"] = db_path
-    import uvicorn
     uvicorn.run("ttr_tracker.dashboard.app:app", host=host, port=port, reload=False)
 
 
@@ -191,8 +192,6 @@ def export(ctx: click.Context, gamemode: str, output: str) -> None:
     if not entries:
         click.echo("No data to export.")
         return
-
-    import csv
 
     fields = [
         "score", "lines", "level", "apm", "pps", "kpp", "kps",

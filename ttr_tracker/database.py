@@ -1,6 +1,6 @@
 from collections.abc import Generator
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -13,6 +13,7 @@ from sqlalchemy import (
     create_engine,
     DateTime,
     ForeignKey,
+    NullPool,
 )
 from sqlalchemy.orm import Session, declarative_base, relationship
 
@@ -28,10 +29,10 @@ class ReplayRow(Base):
     user_id = Column(String, nullable=True)
     username = Column(String, nullable=True)
     version = Column(Integer, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
-    stats = relationship("StatsRow", back_populates="replay", uselist=False)
-    options = relationship("OptionsRow", back_populates="replay", uselist=False)
+    stats = relationship("StatsRow", back_populates="replay", uselist=False, cascade="all, delete-orphan")
+    options = relationship("OptionsRow", back_populates="replay", uselist=False, cascade="all, delete-orphan")
 
 
 class StatsRow(Base):
@@ -94,7 +95,7 @@ class MatchRow(Base):
     player1_wins = Column(Integer, default=0)
     player2_wins = Column(Integer, default=0)
     winner_name = Column(String, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
     rounds = relationship("MatchRoundRow", back_populates="match", lazy="selectin")
 
@@ -141,7 +142,7 @@ class PartialRunRow(Base):
     kps = Column(Float, default=0.0)
     source_image = Column(String, nullable=True)
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc).replace(tzinfo=None))
 
 
 class OptionsRow(Base):
@@ -160,13 +161,42 @@ class OptionsRow(Base):
 
 class Database:
     def __init__(self, db_path: str | Path) -> None:
-        self.engine = create_engine(f"sqlite:///{db_path}", echo=False)
+        if str(db_path) == ":memory:":
+            url = "sqlite:///:memory:"
+            poolclass = None
+            connect_args = {}
+        else:
+            path = Path(db_path).resolve()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            url = "sqlite:///" + path.as_posix()
+            poolclass = NullPool
+            connect_args = {"check_same_thread": False}
+        self.engine = create_engine(
+            url,
+            echo=False,
+            poolclass=poolclass,
+            connect_args=connect_args,
+        )
         Base.metadata.create_all(self.engine)
+
+    @staticmethod
+    def _to_utc_naive(dt: datetime) -> datetime:
+        """Convert a datetime to a naive UTC datetime for storage."""
+        if dt.tzinfo is not None:
+            return dt.astimezone(timezone.utc).replace(tzinfo=None)
+        return dt
 
     @contextmanager
     def session(self) -> Generator[Session, None, None]:
-        with Session(self.engine) as sess:
+        sess = Session(self.engine, expire_on_commit=False)
+        try:
             yield sess
+            sess.commit()
+        except:
+            sess.rollback()
+            raise
+        finally:
+            sess.close()
 
     def replay_exists(self, replay_id: str) -> bool:
         with self.session() as sess:
@@ -185,13 +215,12 @@ class Database:
             row = ReplayRow(
                 id=replay_id,
                 gamemode=gamemode,
-                timestamp=timestamp,
+                timestamp=self._to_utc_naive(timestamp),
                 username=username,
                 user_id=user_id,
                 version=version,
             )
             sess.add(row)
-            sess.commit()
 
     def insert_stats(
         self,
@@ -202,7 +231,6 @@ class Database:
         with self.session() as sess:
             row = StatsRow(replay_id=replay_id, gamemode=gamemode, **kwargs)
             sess.add(row)
-            sess.commit()
 
     def insert_options(
         self,
@@ -212,7 +240,6 @@ class Database:
         with self.session() as sess:
             row = OptionsRow(replay_id=replay_id, **kwargs)
             sess.add(row)
-            sess.commit()
 
     def count_replays(self, gamemode: Optional[str] = None) -> int:
         with self.session() as sess:
@@ -260,29 +287,62 @@ class Database:
             )
             return [(ts, float(v) if v is not None else 0.0) for ts, v in q.all()]
 
-    def get_pbs(self, gamemode: str) -> dict[str, tuple[float, str, datetime]]:
-        pb_columns = [
-            "score", "lines", "apm", "pps", "level", "top_combo", "top_btb",
-            "tspins", "quads", "all_clears", "finesse_perfect_pieces",
-            "kpp", "kps", "final_time",
-        ]
-        result = {}
+    def get_trend_data_pair(
+        self, gamemode: str, col1: str, col2: str, limit: int = 200
+    ) -> list[tuple[datetime, float, float]]:
+        """Return two stat columns in a single query so rows are guaranteed aligned."""
         with self.session() as sess:
-            for col_name in pb_columns:
-                col = getattr(StatsRow, col_name, None)
-                if col is None:
-                    continue
-                order = col.asc() if col_name == "final_time" else col.desc()
-                row = (
-                    sess.query(col, ReplayRow.id, ReplayRow.timestamp)
-                    .join(ReplayRow, ReplayRow.id == StatsRow.replay_id)
-                    .filter(ReplayRow.gamemode == gamemode)
-                    .order_by(order)
-                    .first()
-                )
-                if row and row[0] is not None:
-                    result[col_name] = (float(row[0]), row[1], row[2])
-        return result
+            c1 = getattr(StatsRow, col1, None)
+            c2 = getattr(StatsRow, col2, None)
+            if c1 is None or c2 is None:
+                return []
+            q = (
+                sess.query(ReplayRow.timestamp, c1, c2)
+                .join(StatsRow, ReplayRow.id == StatsRow.replay_id)
+                .filter(ReplayRow.gamemode == gamemode)
+                .order_by(ReplayRow.timestamp.asc())
+                .limit(limit)
+            )
+            return [
+                (ts, float(v1) if v1 is not None else 0.0, float(v2) if v2 is not None else 0.0)
+                for ts, v1, v2 in q.all()
+            ]
+
+    def get_trend_data_multi(
+        self, gamemode: str, columns: list[str], limit: int = 200
+    ) -> dict[str, list[tuple[datetime, float]]]:
+        """Return multiple stat columns in a single batched query.
+
+        Returns dict mapping column name -> list of (timestamp, value) pairs.
+        All lists are aligned to the same rows (same ordering, same length).
+        """
+        attrs = []
+        for col in columns:
+            c = getattr(StatsRow, col, None)
+            if c is None:
+                continue
+            attrs.append((col, c))
+
+        if not attrs:
+            return {}
+
+        with self.session() as sess:
+            entities = [ReplayRow.timestamp] + [ac for _, ac in attrs]
+            q = (
+                sess.query(*entities)
+                .join(StatsRow, ReplayRow.id == StatsRow.replay_id)
+                .filter(ReplayRow.gamemode == gamemode)
+                .order_by(ReplayRow.timestamp.asc())
+                .limit(limit)
+            )
+            rows = q.all()
+            result: dict[str, list[tuple[datetime, float]]] = {col: [] for col, _ in attrs}
+            for row in rows:
+                ts = row[0]
+                for i, (col, _) in enumerate(attrs):
+                    val = row[i + 1]
+                    result[col].append((ts, float(val) if val is not None else 0.0))
+            return result
 
     def match_exists(self, match_id: str) -> bool:
         with self.session() as sess:
@@ -303,7 +363,7 @@ class Database:
         with self.session() as sess:
             row = MatchRow(
                 id=match_id,
-                timestamp=timestamp,
+                timestamp=self._to_utc_naive(timestamp),
                 player1_id=player1_id,
                 player1_name=player1_name,
                 player2_id=player2_id,
@@ -313,7 +373,6 @@ class Database:
                 winner_name=winner_name,
             )
             sess.add(row)
-            sess.commit()
 
     def insert_match_round(self, match_id: str, round_number: int, **kwargs) -> None:
         with self.session() as sess:
@@ -377,25 +436,36 @@ class Database:
             return [(ts, float(v) if v is not None else 0.0) for ts, v in rows]
 
     def get_match_aggregate_trends(
-        self, player_id: str, limit: int = 200
+        self, player_id: Optional[str], limit: int = 200
     ) -> list[dict]:
+        if not player_id:
+            return []
         with self.session() as sess:
             matches = (
                 sess.query(MatchRow)
                 .filter(
                     (MatchRow.player1_id == player_id) | (MatchRow.player2_id == player_id)
                 )
-                .order_by(MatchRow.timestamp.asc())
+                .order_by(MatchRow.timestamp.desc())
                 .limit(limit)
                 .all()
             )
+            matches = list(reversed(matches))  # back to chronological for trend display
+            match_ids = [m.id for m in matches]
+            all_rounds = (
+                sess.query(MatchRoundRow)
+                .filter(
+                    MatchRoundRow.match_id.in_(match_ids),
+                    MatchRoundRow.player_id == player_id,
+                )
+                .all()
+            )
+            rounds_by_match: dict[str, list[MatchRoundRow]] = {}
+            for r in all_rounds:
+                rounds_by_match.setdefault(r.match_id, []).append(r)
             result = []
             for m in matches:
-                rounds = (
-                    sess.query(MatchRoundRow)
-                    .filter_by(match_id=m.id, player_id=player_id)
-                    .all()
-                )
+                rounds = rounds_by_match.get(m.id, [])
                 if not rounds:
                     continue
                 avg_apm = sum(r.apm or 0 for r in rounds) / len(rounds)
@@ -424,31 +494,14 @@ class Database:
                 })
             return result
 
-    def get_session_groups(self, gamemode: str, gap_minutes: int = 60) -> list[list[ReplayRow]]:
-        with self.session() as sess:
-            rows = (
-                sess.query(ReplayRow)
-                .filter(ReplayRow.gamemode == gamemode)
-                .order_by(ReplayRow.timestamp.asc())
-                .all()
-            )
-        if not rows:
-            return []
-        groups: list[list[ReplayRow]] = [[rows[0]]]
-        for r in rows[1:]:
-            gap = (r.timestamp - groups[-1][-1].timestamp).total_seconds() / 60
-            if gap > gap_minutes:
-                groups.append([])
-            groups[-1].append(r)
-        return groups
-
     # ── Partial Run CRUD ──────────────────────────────────────────────────
 
     def insert_partial_run(self, **kwargs) -> int:
+        if "timestamp" in kwargs:
+            kwargs["timestamp"] = self._to_utc_naive(kwargs["timestamp"])
         with self.session() as sess:
             row = PartialRunRow(**kwargs)
             sess.add(row)
-            sess.commit()
             return row.id
 
     def get_all_partial_runs(
@@ -458,7 +511,9 @@ class Database:
             q = sess.query(PartialRunRow)
             if gamemode:
                 q = q.filter(PartialRunRow.gamemode == gamemode)
-            q = q.order_by(PartialRunRow.timestamp.desc()).limit(limit).offset(offset)
+            q = q.order_by(PartialRunRow.timestamp.desc()).offset(offset)
+            if limit:
+                q = q.limit(limit)
             return list(q.all())
 
     def get_partial_run(self, run_id: int) -> Optional[PartialRunRow]:
@@ -471,17 +526,25 @@ class Database:
             if not row:
                 return False
             sess.delete(row)
-            sess.commit()
+            return True
+
+    def delete_replay(self, replay_id: str) -> bool:
+        with self.session() as sess:
+            row = sess.query(ReplayRow).filter_by(id=replay_id).first()
+            if not row:
+                return False
+            sess.delete(row)
             return True
 
     def update_partial_run(self, run_id: int, **kwargs) -> bool:
+        if "timestamp" in kwargs:
+            kwargs["timestamp"] = self._to_utc_naive(kwargs["timestamp"])
         with self.session() as sess:
             row = sess.query(PartialRunRow).filter_by(id=run_id).first()
             if not row:
                 return False
             for k, v in kwargs.items():
                 setattr(row, k, v)
-            sess.commit()
             return True
 
     def count_partial_runs(self, gamemode: Optional[str] = None) -> int:

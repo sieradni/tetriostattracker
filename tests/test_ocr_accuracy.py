@@ -6,11 +6,18 @@ from pathlib import Path
 import pytest
 
 from ttr_tracker.database import Database, PartialRunRow
-from ttr_tracker.ocr import extract_stats
+from ttr_tracker.ocr import Conf, extract_stats
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DB_PATH = os.environ.get("TTR_DB_PATH", str(BASE_DIR / "data" / "tracker.db"))
-db = Database(DB_PATH)
+_db_instance: Database | None = None
+
+
+def _get_db() -> Database:
+    global _db_instance
+    if _db_instance is None:
+        _db_instance = Database(DB_PATH)
+    return _db_instance
 
 # Tolerance table: (high_conf_tol, medium_conf_tol)
 # Medium confidence gets wider tolerance
@@ -47,7 +54,7 @@ _OCR_CACHE: dict[int, dict] = {}
 
 
 def _get_verified_runs() -> list[PartialRunRow]:
-    with db.session() as sess:
+    with _get_db().session() as sess:
         return (
             sess.query(PartialRunRow)
             .filter(PartialRunRow.source_image.isnot(None))
@@ -116,10 +123,10 @@ def _check_field(
     Skips fields where OCR confidence is 'missing' (the pipeline knew it failed).
     """
     ocr_val = ocr_entry.get("value")
-    ocr_conf = ocr_entry.get("conf", "missing")
+    ocr_conf = ocr_entry.get("conf", Conf.missing)
 
     # --- Confidence "missing": the pipeline knew it couldn't find this field ---
-    if ocr_conf == "missing":
+    if ocr_conf == Conf.missing:
         if ground_truth is not None:
             # all_clears: None and 0 are equivalent
             if stat_field == "all_clears" and ground_truth == 0:
@@ -127,7 +134,7 @@ def _check_field(
             return False, f"OCR=missing, expected={ground_truth}", CAT_VALUE_MISSING
         return True, None, None
 
-    tol = tol_strict if ocr_conf == "high" else tol_lenient
+    tol = tol_strict if ocr_conf == Conf.high else tol_lenient
 
     # --- Null handling ---
     if ocr_val is None and ground_truth is None:

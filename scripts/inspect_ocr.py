@@ -12,6 +12,11 @@ and prints the raw OCR text Tesseract returns for each tess image.
 import sys
 from pathlib import Path
 
+# Ensure project root is on sys.path when run from scripts/
+_project_root = Path(__file__).resolve().parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
 from ttr_tracker.database import Database
 from ttr_tracker import ocr
 from PIL import Image

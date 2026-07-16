@@ -4,15 +4,26 @@ from pathlib import Path
 from ttr_tracker.models import TTRFile
 
 
+class ParseError(ValueError):
+    """Raised when a .ttr or .ttrm file cannot be parsed."""
+
+
 def parse_ttr(path: str | Path) -> TTRFile:
-    raw = Path(path).read_text(encoding="utf-8")
-    data = json.loads(raw)
-    return TTRFile.model_validate(data)
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+        data = json.loads(raw)
+        return TTRFile.model_validate(data)
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+        raise ParseError(f"Failed to parse .ttr file {path}: {e}") from e
 
 
 def parse_ttrm(path: str | Path) -> dict:
-    raw = Path(path).read_text(encoding="utf-8")
-    data = json.loads(raw)
+    try:
+        raw = Path(path).read_text(encoding="utf-8")
+        data = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError, OSError) as e:
+        raise ParseError(f"Failed to parse .ttrm file {path}: {e}") from e
+
     replay = data.get("replay", {})
     leaderboard = replay.get("leaderboard", [])
     rounds_raw = replay.get("rounds", [])

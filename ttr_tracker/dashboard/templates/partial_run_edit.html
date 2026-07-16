@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Edit Partial Run — Tetrio Stats Tracker</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #0f0f12; color: #e0e0e0; min-height: 100vh; }
+        nav { background: #1a1a22; padding: 0.75rem 1.5rem; display: flex; gap: 1.5rem; align-items: center; border-bottom: 1px solid #2a2a35; }
+        nav a { color: #a0a0b0; text-decoration: none; font-size: 0.9rem; font-weight: 500; padding: 0.3rem 0; border-bottom: 2px solid transparent; }
+        nav a:hover, nav a.active { color: #fff; border-bottom-color: #6c5ce7; }
+        nav .brand { color: #fff; font-weight: 700; font-size: 1.05rem; margin-right: auto; letter-spacing: 0.3px; }
+        .container { max-width: 800px; margin: 0 auto; padding: 1.5rem; }
+        .card { background: #1a1a22; border: 1px solid #2a2a35; border-radius: 8px; padding: 1.25rem; margin-bottom: 1rem; }
+        .card h2 { font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.5px; color: #6c5ce7; margin-bottom: 0.75rem; }
+        label { display: block; font-size: 0.8rem; color: #888; margin-bottom: 0.25rem; }
+        input, textarea { width: 100%; padding: 0.5rem; background: #0f0f12; border: 1px solid #2a2a35; border-radius: 4px; color: #e0e0e0; font-size: 0.9rem; margin-bottom: 0.75rem; outline: none; }
+        input:focus, textarea:focus { border-color: #6c5ce7; }
+        input.computed { border-color: #6c5ce744; }
+        input.invalid { border-color: #d63031 !important; }
+        input.warn { border-color: #fdcb6e66 !important; }
+        .form-row { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; }
+        button { background: #6c5ce7; color: #fff; border: none; border-radius: 4px; padding: 0.6rem 1.5rem; font-size: 0.9rem; cursor: pointer; font-weight: 600; }
+        button:hover { background: #5a4bd1; }
+        button:disabled { background: #3a3a45; color: #666; cursor: not-allowed; }
+        .error { color: #d63031; font-size: 0.8rem; margin-bottom: 0.5rem; }
+        .success { color: #00b894; font-size: 0.8rem; margin-bottom: 0.5rem; }
+        .hint { font-size: 0.7rem; color: #555; margin-top: -0.5rem; margin-bottom: 0.75rem; }
+        a { color: #6c5ce7; text-decoration: none; }
+        a:hover { text-decoration: underline; }
+        .val-msg { font-size: 0.7rem; margin-top: -0.5rem; margin-bottom: 0.75rem; min-height: 1em; }
+        .val-msg.error { color: #d63031; }
+        .val-msg.ok { color: #00b894; }
+        .val-msg.warn { color: #fdcb6e; }
+    </style>
+</head>
+<body>
+    <nav>
+        <span class="brand">Tetrio Tracker</span>
+        <a href="/">Overview</a>
+        <a href="/trends">Trends</a>
+        <a href="/pbs">PBs</a>
+        <a href="/blitz">Blitz Stats</a>
+        <a href="/sessions">Sessions</a>
+        <a href="/replays">Replays</a>
+        <a href="/ocr-test">OCR Test</a>
+        <a href="/matches">Matches</a>
+    </nav>
+    <div class="container">
+        <a href="/replays/partial-/*{{RUN_ID}}*/" style="color:#888;font-size:0.85rem;">&larr; Back to run</a>
+        <h1 style="margin:0.75rem 0 1rem;font-size:1.3rem;">Edit Partial Run</h1>
+
+        <div id="status"></div>
+        <div id="valSummary"></div>
+
+        <form id="editForm" onsubmit="return false;">
+            <div class="card">
+                <h2>Run Info</h2>
+                <label>Timestamp <span style="color:#d63031;">*</span></label>
+                <input type="datetime-local" id="runTimestamp" required>
+
+                <div class="form-row">
+                    <div>
+                        <label>Score <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="score" min="0" required>
+                        <div class="val-msg" id="scoreMsg"></div>
+                    </div>
+                    <div>
+                        <label>Pieces Placed <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="pieces" min="1" required>
+                        <div class="val-msg" id="piecesMsg"></div>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div>
+                        <label>PPS <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="pps" min="0" step="0.01" required class="computed">
+                        <div class="val-msg" id="ppsMsg"></div>
+                    </div>
+                    <div>
+                        <label>Inputs <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="inputs" min="0" required>
+                        <div class="val-msg" id="inputsMsg"></div>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div>
+                        <label>Inputs / Piece (KPP) <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="kpp" min="0" step="0.01" required class="computed">
+                        <div class="val-msg" id="kppMsg"></div>
+                    </div>
+                    <div>
+                        <label>Score / Piece (SPP) <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="spp" min="0" step="0.1" required class="computed">
+                        <div class="val-msg" id="sppMsg"></div>
+                    </div>
+                </div>
+
+                <div class="form-row">
+                    <div>
+                        <label>All Clears <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="allClears" min="0" required>
+                    </div>
+                    <div>
+                        <label>Time Left (seconds) <span style="color:#d63031;">*</span></label>
+                        <input type="number" id="timeLeft" min="0" max="120" step="0.1" required>
+                        <div class="val-msg" id="timeLeftMsg"></div>
+                    </div>
+                </div>
+
+                <div class="form-row" style="margin-bottom:0;">
+                    <div>
+                        <label style="color:#6c5ce7;">Time Elapsed (auto)</label>
+                        <input type="text" id="timeElapsedDisplay" readonly style="color:#6c5ce7;background:#0a0a0e;">
+                    </div>
+                    <div>
+                        <label style="color:#6c5ce7;">KPS (auto)</label>
+                        <input type="text" id="kpsDisplay" readonly style="color:#6c5ce7;background:#0a0a0e;">
+                    </div>
+                </div>
+
+                <label>Notes (optional)</label>
+                <textarea id="notes" rows="3" placeholder="Any additional context about this run..."></textarea>
+            </div>
+
+            <button id="saveBtn" onclick="submitEdit()">Save Changes</button>
+            <a href="/replays/partial-/*{{RUN_ID}}*/" style="display:inline-block;background:#2a2a35;color:#aaa;border:none;border-radius:4px;padding:0.6rem 1.5rem;font-size:0.9rem;cursor:pointer;font-weight:600;text-decoration:none;margin-left:0.5rem;">Cancel</a>
+        </form>
+    </div>
+
+    <script>
+    const runId = parseInt('/*{{RUN_ID}}*/', 10);
+    let kppAuto = true, sppAuto = true, ppsAuto = true;
+
+    function getVal(id) { return parseFloat(document.getElementById(id).value) || 0; }
+
+    function compute() {
+        const score = getVal('score');
+        const pieces = getVal('pieces');
+        const inputs = getVal('inputs');
+        const timeLeft = getVal('timeLeft');
+        const timeElapsed = Math.max(0, 120 - timeLeft);
+
+        document.getElementById('timeElapsedDisplay').value = timeElapsed.toFixed(2) + 's';
+        document.getElementById('kpsDisplay').value = (timeElapsed > 0 ? (inputs / timeElapsed).toFixed(4) : '—');
+
+        if (kppAuto && pieces > 0) {
+            document.getElementById('kpp').value = (inputs / pieces).toFixed(4);
+        }
+        if (sppAuto && pieces > 0) {
+            document.getElementById('spp').value = (score / pieces).toFixed(2);
+        }
+        if (ppsAuto && timeElapsed > 0) {
+            document.getElementById('pps').value = (pieces / timeElapsed).toFixed(4);
+        }
+
+        validate();
+    }
+
+    const GROUP_LABELS = {
+        'score-piece-spp': 'Score, Pieces, SPP',
+        'inputs-piece-kpp': 'Inputs, Pieces, KPP',
+        'pps-piece-time': 'PPS, Pieces, Time Left',
+    };
+
+    function setMsg(id, text, cls) {
+        const el = document.getElementById(id + 'Msg');
+        if (!el) return;
+        el.textContent = text;
+        el.className = 'val-msg' + (cls ? ' ' + cls : '');
+    }
+
+    function clearMsgs() {
+        ['score','pieces','pps','inputs','kpp','spp','timeLeft','runTimestamp'].forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.classList.remove('invalid', 'warn');
+            setMsg(id, '', '');
+        });
+    }
+
+    function validate() {
+        const score = getVal('score');
+        const pieces = getVal('pieces');
+        const pps = getVal('pps');
+        const inputs = getVal('inputs');
+        const kpp = getVal('kpp');
+        const spp = getVal('spp');
+        const allClears = getVal('allClears');
+        const timeLeft = getVal('timeLeft');
+        const ts = document.getElementById('runTimestamp').value;
+        const timeElapsed = Math.max(0, 120 - timeLeft);
+
+        clearMsgs();
+
+        const fieldErrors = {};
+        const warnings = [];
+
+        // Basic field-level validation
+        if (!ts) fieldErrors.runTimestamp = 'Required.';
+        if (score <= 0) fieldErrors.score = 'Must be positive.';
+        if (pieces <= 0) fieldErrors.pieces = 'Must be positive.';
+        if (pps <= 0) fieldErrors.pps = 'Must be positive.';
+        if (inputs <= 0) fieldErrors.inputs = 'Must be positive.';
+        if (kpp <= 0) fieldErrors.kpp = 'Must be positive.';
+        if (spp <= 0) fieldErrors.spp = 'Must be positive.';
+        if (allClears < 0) fieldErrors.allClears = 'Cannot be negative.';
+        if (timeLeft <= 0) fieldErrors.timeLeft = 'Must be positive.';
+        if (timeLeft >= 120) fieldErrors.timeLeft = 'Must be < 120s.';
+        if (timeElapsed <= 0) fieldErrors.timeLeft = 'Elapsed = 0 — check Time Left.';
+
+        // Apply field-level errors
+        Object.keys(fieldErrors).forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.classList.add('invalid');
+            setMsg(id, fieldErrors[id], 'error');
+        });
+
+        const hasFieldErrs = Object.keys(fieldErrors).length > 0;
+
+        // Cross-field consistency checks (only if group members are individually valid)
+        const groupOk = (ids) => ids.every(id => !fieldErrors[id]);
+
+        if (groupOk(['score','pieces','spp'])) {
+            const sppExp = score / pieces;
+            const scoreExp = spp * pieces;
+            const piecesExp1 = score / spp;
+            const pctSpp = Math.abs(spp - sppExp) / sppExp * 100;
+            const pctScore = Math.abs(score - scoreExp) / scoreExp * 100;
+            const pctPieces = Math.abs(pieces - piecesExp1) / piecesExp1 * 100;
+            const maxPct = Math.max(pctSpp, pctScore, pctPieces);
+            if (maxPct > 3) {
+                warnings.push(GROUP_LABELS['score-piece-spp'] + ': values differ by ' + maxPct.toFixed(1) + '%');
+                ['score','pieces','spp'].forEach(id => {
+                    document.getElementById(id).classList.add('warn');
+                });
+                setMsg('score', 'SPP\xd7Pieces = ' + Math.round(sppExp * pieces) + ' vs ' + score, 'warn');
+                setMsg('pieces', 'Score\xf7SPP = ' + Math.round(score / spp) + ' vs ' + pieces, 'warn');
+                setMsg('spp', 'Score\xf7Pieces = ' + sppExp.toFixed(2) + ' vs ' + spp.toFixed(2), 'warn');
+            }
+        }
+
+        if (groupOk(['inputs','pieces','kpp'])) {
+            const kppExp = inputs / pieces;
+            const inputsExp = kpp * pieces;
+            const piecesExp2 = inputs / kpp;
+            const pctKpp = Math.abs(kpp - kppExp) / kppExp * 100;
+            const pctInputs = Math.abs(inputs - inputsExp) / inputsExp * 100;
+            const pctPieces2 = Math.abs(pieces - piecesExp2) / piecesExp2 * 100;
+            const maxPct = Math.max(pctKpp, pctInputs, pctPieces2);
+            if (maxPct > 3) {
+                warnings.push(GROUP_LABELS['inputs-piece-kpp'] + ': values differ by ' + maxPct.toFixed(1) + '%');
+                ['inputs','pieces','kpp'].forEach(id => {
+                    document.getElementById(id).classList.add('warn');
+                });
+                setMsg('inputs', 'KPP\xd7Pieces = ' + Math.round(kppExp * pieces) + ' vs ' + inputs, 'warn');
+                setMsg('pieces', 'Inputs\xf7KPP = ' + Math.round(inputs / kpp) + ' vs ' + pieces, 'warn');
+                setMsg('kpp', 'Inputs\xf7Pieces = ' + kppExp.toFixed(2) + ' vs ' + kpp.toFixed(2), 'warn');
+            }
+        }
+
+        if (groupOk(['pps','pieces','timeLeft']) && timeElapsed > 0) {
+            const ppsExp = pieces / timeElapsed;
+            const piecesExp3 = pps * timeElapsed;
+            const timeExp = pieces / pps;
+            const pctPps = Math.abs(pps - ppsExp) / ppsExp * 100;
+            const pctPieces3 = Math.abs(pieces - piecesExp3) / piecesExp3 * 100;
+            const pctTime = Math.abs(timeElapsed - timeExp) / timeExp * 100;
+            const maxPct = Math.max(pctPps, pctPieces3, pctTime);
+            if (maxPct > 3) {
+                warnings.push(GROUP_LABELS['pps-piece-time'] + ': values differ by ' + maxPct.toFixed(1) + '%');
+                ['pps','pieces','timeLeft'].forEach(id => {
+                    document.getElementById(id).classList.add('warn');
+                });
+                setMsg('pps', 'Pieces\xf7Elapsed = ' + ppsExp.toFixed(2) + ' vs ' + pps.toFixed(2), 'warn');
+                setMsg('pieces', 'PPS\xd7Elapsed = ' + Math.round(ppsExp * timeElapsed) + ' vs ' + pieces, 'warn');
+                setMsg('timeLeft', '120 \u2212 Pieces\xf7PPS = ' + (120 - timeExp).toFixed(1) + 's vs ' + timeLeft.toFixed(1) + 's', 'warn');
+            }
+        }
+
+        // Build summary
+        const errMsg = document.getElementById('valSummary');
+        const parts = [];
+        if (Object.keys(fieldErrors).length) {
+            parts.push('<div class="error">Fix the highlighted fields before saving.</div>');
+        }
+        warnings.forEach(w => {
+            parts.push('<div class="val-msg warn" style="margin-bottom:0.15rem;">\u26A0 ' + w + '</div>');
+        });
+        errMsg.innerHTML = parts.join('');
+
+        const canSave = !hasFieldErrs && warnings.length === 0;
+        document.getElementById('saveBtn').disabled = !canSave;
+        return canSave;
+    }
+
+    document.getElementById('score').addEventListener('input', compute);
+    document.getElementById('pieces').addEventListener('input', compute);
+    document.getElementById('inputs').addEventListener('input', compute);
+    document.getElementById('timeLeft').addEventListener('input', compute);
+
+    document.getElementById('kpp').addEventListener('input', () => { kppAuto = false; compute(); });
+    document.getElementById('spp').addEventListener('input', () => { sppAuto = false; compute(); });
+    document.getElementById('pps').addEventListener('input', () => { ppsAuto = false; compute(); });
+
+    document.getElementById('runTimestamp').addEventListener('input', validate);
+
+    async function loadData() {
+        const r = await fetch(`/api/partial-runs/${runId}`);
+        if (!r.ok) {
+            document.getElementById('status').innerHTML = '<div class="error">Failed to load run data</div>';
+            return;
+        }
+        const d = await r.json();
+        const s = d.stats;
+
+        const ts = new Date(d.timestamp);
+        const local = new Date(ts.getTime() - ts.getTimezoneOffset() * 60000);
+        document.getElementById('runTimestamp').value = local.toISOString().slice(0, 16);
+        document.getElementById('score').value = s.score;
+        document.getElementById('pieces').value = s.pieces_placed;
+        document.getElementById('pps').value = s.pps;
+        document.getElementById('inputs').value = s.inputs;
+        document.getElementById('kpp').value = s.kpp;
+        document.getElementById('spp').value = s.spp;
+        document.getElementById('allClears').value = s.all_clears;
+        document.getElementById('timeLeft').value = s.time_left;
+        document.getElementById('notes').value = d.notes || '';
+
+        compute();
+    }
+
+    async function submitEdit() {
+        if (!validate()) return;
+
+        const status = document.getElementById('status');
+        const data = new URLSearchParams();
+
+        data.set('timestamp', new Date(document.getElementById('runTimestamp').value).toISOString());
+        data.set('score', document.getElementById('score').value);
+        data.set('pieces', document.getElementById('pieces').value);
+        data.set('pps', document.getElementById('pps').value);
+        data.set('inputs', document.getElementById('inputs').value);
+        data.set('kpp', document.getElementById('kpp').value);
+        data.set('spp', document.getElementById('spp').value);
+        data.set('all_clears', document.getElementById('allClears').value);
+        data.set('time_left', document.getElementById('timeLeft').value);
+        data.set('notes', document.getElementById('notes').value || '');
+
+        document.getElementById('saveBtn').disabled = true;
+        status.innerHTML = '<div class="success">Saving...</div>';
+        try {
+            const r = await fetch(`/api/partial-runs/${runId}`, { method: 'PUT', body: data });
+            const result = await r.json();
+            if (result.status === 'ok') {
+                status.innerHTML = '<div class="success">Saved! <a href="/replays/partial-' + runId + '">View run</a></div>';
+            } else {
+                status.innerHTML = '<div class="error">Error: ' + (result.error || 'unknown') + '</div>';
+                document.getElementById('saveBtn').disabled = false;
+            }
+        } catch (e) {
+            status.innerHTML = '<div class="error">Error: ' + e.message + '</div>';
+            document.getElementById('saveBtn').disabled = false;
+        }
+    }
+
+    loadData();
+    </script>
+</body>
+</html>

@@ -27,6 +27,8 @@
         .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600; }
         .badge-partial { background: #d6303122; color: #d63031; border: 1px solid #d6303144; }
         .na { color: #555; font-style: italic; }
+        .btn-del { display:inline-block;background:#d63031;color:#fff;border:none;border-radius:4px;padding:0.4rem 1rem;font-size:0.8rem;cursor:pointer;font-weight:600;text-decoration:none; }
+        .btn-del:hover { background:#b71c1c; }
     </style>
 </head>
 <body>
@@ -45,11 +47,32 @@
     <div class="container" id="app"></div>
     <script>
     function fmt(secs) { const m = Math.floor(secs / 60); const s = (secs % 60).toFixed(2); return m > 0 ? `${m}:${s.padStart(5,'0')}` : `${s}s`; }
+    async function deleteRun() {
+        if (!confirm('Delete this partial run permanently?')) return;
+        try {
+            const r = await fetch('/api/partial-runs/' + d.id.replace('partial-', ''), { method: 'DELETE' });
+            const result = await r.json();
+            if (result.status === 'deleted') {
+                window.location.href = '/replays';
+            } else {
+                alert('Delete failed: ' + (result.error || 'unknown'));
+            }
+        } catch (e) {
+            alert('Delete failed: ' + e.message);
+        }
+    }
+
     const d = /*{{PARTIAL_DATA}}*/;
     const s = d.stats;
 
     document.getElementById('app').innerHTML = `
-        <a href="/replays" style="color:#888;font-size:0.85rem;">&larr; Back to replays</a>
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+            <a href="/replays" style="color:#888;font-size:0.85rem;">&larr; Back to replays</a>
+            <div>
+                <a href="/partial-runs/${d.id.replace('partial-','')}/edit" style="background:#6c5ce7;color:#fff;border:none;border-radius:4px;padding:0.4rem 1rem;font-size:0.8rem;cursor:pointer;font-weight:600;text-decoration:none;margin-right:0.5rem;">Edit</a>
+                <button class="btn-del" onclick="deleteRun()">Delete</button>
+            </div>
+        </div>
         <h1 style="margin:0.75rem 0;font-size:1.3rem;">
             Partial Run <span class="badge badge-partial">screenshot</span>
             <span style="font-size:0.8rem;color:#888;font-weight:400;margin-left:0.5rem;">${new Date(d.timestamp).toLocaleString()}</span>

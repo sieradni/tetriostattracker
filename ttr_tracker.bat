@@ -1,1 +1,1 @@
-python -m ttr_tracker.cli serve
+@python -m ttr_tracker %*

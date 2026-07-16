@@ -24,9 +24,12 @@ def kaplan_meier(times: list[float], events: list[bool]) -> list[dict]:
     while i < n:
         t = paired[i][0]
         d = 0
+        c = 0
         while i < n and paired[i][0] == t:
             if paired[i][1]:
                 d += 1
+            else:
+                c += 1
             i += 1
 
         if d > 0:
@@ -43,11 +46,7 @@ def kaplan_meier(times: list[float], events: list[bool]) -> list[dict]:
             "events": d,
         })
 
-        at_risk -= d
-        while i < n and paired[i][0] == t:
-            if not paired[i][1]:
-                at_risk -= 1
-            i += 1
+        at_risk -= d + c
 
     return result
 

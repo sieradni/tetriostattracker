@@ -1,5 +1,12 @@
+import sys
 import json
 from pathlib import Path
+
+# Ensure project root is on sys.path when run from scripts/
+_project_root = Path(__file__).resolve().parent.parent
+if str(_project_root) not in sys.path:
+    sys.path.insert(0, str(_project_root))
+
 from ttr_tracker.ocr import extract_stats, is_available, preprocess_image
 import pytesseract
 
@@ -18,7 +25,7 @@ except Exception:
 
 from PIL import Image
 
-img_path = Path("test_images") / "Screenshot 2026-07-13 005941.png"
+img_path = Path("tests") / "test_images" / "Screenshot 2026-07-13 005941.png"
 print("Available:", is_available())
 
 result = extract_stats(str(img_path))
@@ -27,7 +34,7 @@ print("Result:", json.dumps(result, indent=2))
 # Also save preprocessed image and dump raw text
 img = Image.open(img_path)
 proc = preprocess_image(img)
-proc.save("test_images/preprocessed.png")
+proc.save("tests/test_images/preprocessed.png")
 print("Saved preprocessed image")
 
 data = pytesseract.image_to_data(proc, output_type=pytesseract.Output.DICT, config="--psm 11 --oem 3")

@@ -14,11 +14,18 @@ macOS:   brew install tesseract
 from __future__ import annotations
 
 import re
+from enum import StrEnum
 from pathlib import Path
 from typing import Any, Optional
 
 import numpy as np
 from PIL import Image, ImageEnhance, ImageFilter
+
+
+class Conf(StrEnum):
+    high = "high"
+    medium = "medium"
+    missing = "missing"
 
 # ── Locate Tesseract engine ───────────────────────────────────────────────
 
@@ -28,32 +35,38 @@ _TESS_PATHS = [
     r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
 ]
 
-_TESSERACT_OK = False
+_TESSERACT_OK: bool | None = None
 pytesseract = None
 
-try:
-    import pytesseract as _pt
 
+def _init_tesseract() -> None:
+    global _TESSERACT_OK, pytesseract
+    if _TESSERACT_OK is not None:
+        return
     try:
-        _pt.get_tesseract_version()
-    except Exception:
-        for p in _TESS_PATHS:
-            if Path(p).exists():
-                _pt.pytesseract.tesseract_cmd = p
-                break
+        import pytesseract as _pt
 
-    _pt.get_tesseract_version()
-    pytesseract = _pt
-    _TESSERACT_OK = True
-except Exception:
-    pass
+        try:
+            _pt.get_tesseract_version()
+        except Exception:
+            for p in _TESS_PATHS:
+                if Path(p).exists():
+                    _pt.pytesseract.tesseract_cmd = p
+                    break
+
+        _pt.get_tesseract_version()
+        pytesseract = _pt
+        _TESSERACT_OK = True
+    except Exception:
+        _TESSERACT_OK = False
 
 
 # ── Regex patterns ────────────────────────────────────────────────────────
 
 RE_PPS = re.compile(r"(\d+\.?\d*)\s*(?:[\/\\][sS8gG5]|[sS])", re.IGNORECASE)
-RE_KPP = re.compile(r"(\d+\.?\d*)\s*[\/\\]?[pP]", re.IGNORECASE)
-RE_SPP = re.compile(r"(\d+\.?\d*)\s*[\/\\]?[pP]", re.IGNORECASE)
+RE_PP = re.compile(r"(\d+\.?\d*)\s*[\/\\]?[pP]", re.IGNORECASE)
+RE_KPP = RE_PP
+RE_SPP = RE_PP
 RE_NUMBER = re.compile(r"^[\d,]+")
 RE_TIME = re.compile(r"(?:(\d+):)?(\d{2})(?:\.(\d))?")
 
@@ -77,6 +90,7 @@ class TesseractNotAvailableError(RuntimeError):
 
 
 def _ensure_tesseract() -> None:
+    _init_tesseract()
     if not _TESSERACT_OK or pytesseract is None:
         raise TesseractNotAvailableError()
 
@@ -813,14 +827,23 @@ def _disambiguate_timer(time_left: float, pieces: Optional[int], pps: Optional[f
             candidates.append(time_left + 60 + 50)  # both lost minutes + 5→0
 
     valid = [t for t in candidates if _plausible(t)]
-    if valid:
-        return min(valid, key=lambda t: abs(t - 116))  # prefer closer to typical 1:56-2:00
-    return time_left
+    if not valid:
+        return time_left
+    if len(valid) == 1:
+        return valid[0]
+    # Multiple plausible candidates: prefer the one whose implied PPS best
+    # matches the OCR'd PPS (the most principled metric).  When the OCR
+    # didn't produce a usable PPS, fall back to the smallest correction
+    # from the raw read — OCR errors are typically small corruptions, so
+    # the least modification is most likely correct.
+    if pps is not None and pps >= 0.5:
+        return min(valid, key=lambda t: abs(pieces / max(120.0 - t, 0.001) - pps))
+    return min(valid, key=lambda t: abs(t - time_left))
 
 
 # ── Confidence helper ─────────────────────────────────────────────────────
 
-def _set_result(result: dict, field: str, value: Any, conf: str, warnings: Optional[list] = None):
+def _set_result(result: dict, field: str, value: Any, conf: Conf, warnings: Optional[list] = None):
     entry: dict[str, Any] = {"value": value, "conf": conf}
     if warnings:
         entry["warnings"] = warnings
@@ -854,39 +877,26 @@ def cross_validate(result: dict) -> None:
             if ratio < 0.8 or ratio > 1.25:
                 _downgrade(s, "pps")
 
-        # KPP cross-check
-        if kpp and pieces and inputs:
-            expected = kpp * pieces
-            ratio = inputs / expected
-            if ratio < 0.8 or ratio > 1.25:
-                _downgrade(s, "kpp")
-
-    # SPP cross-check
-    if spp and pieces and score:
-        expected = spp * pieces
-        ratio = score / expected
-        if ratio < 0.8 or ratio > 1.25:
-            _downgrade(s, "spp")
-
     # ── Fallback: compute missing fields from available ones ──
-    # Time-independent calculations (SPP, KPP) are always exact given
-    # their inputs, so they always override OCR.
+    # SPP and KPP are exact derivatives (score/pieces, inputs/pieces),
+    # so they unconditionally override any OCR read.
     if score is not None and pieces is not None and pieces > 0:
-        _set_result(result, "spp", round(score / pieces, 1), "high")
+        _set_result(result, "spp", round(score / pieces, 1), Conf.high)
     if inputs is not None and pieces is not None and pieces > 0:
-        _set_result(result, "kpp", round(inputs / pieces, 2), "high")
+        _set_result(result, "kpp", round(inputs / pieces, 2), Conf.high)
 
     # Re-read computed SPP for all-clears check
     spp = v("spp")
 
-    # All-clears heuristic: when the OCR found very few pieces or
-    # extremely low SPP, all-clears is impossible.
+    # All-clears heuristic: fewer than 5 placed pieces makes all-clears
+    # impossible (need at least 4 lines cleared).  Low SPP alone is not
+    # evidence — it just means the run had low scoring per piece.
     ac = s.get("all_clears", {}).get("value")
     if ac is not None:
         pv = s.get("pieces_placed", {}).get("value")
-        sv = s.get("spp", {}).get("value")
-        if (pv is not None and pv < 5) or (sv is not None and sv < 50):
+        if pv is not None and pv < 5:
             s["all_clears"]["value"] = 0
+            s["all_clears"]["conf"] = "low"
 
     # Time-based calculations are only reliable when the time source is
     # itself reliable (direct OCR → high conf).  Using a fallback time
@@ -900,45 +910,46 @@ def cross_validate(result: dict) -> None:
     # OCR PPS is missing.  A present OCR PPS is preferred: recomputing here
     # would override a good read with a value that can disagree with the
     # stored (occasionally inconsistent) ground truth for pieces/time.
-    if tl_conf == "high" and pieces is not None and pps is None:
+    if tl_conf == Conf.high and pieces is not None and pps is None:
         elapsed = 120.0 - time_left
         if elapsed > 0:
-            _set_result(result, "pps", round(pieces / elapsed, 2), "high")
+            _set_result(result, "pps", round(pieces / elapsed, 2), Conf.high)
 
     # Time left from pieces / PPS — only if PPS is direct OCR
-    if time_left is None and pps_conf == "high" and pieces is not None and pps is not None and pps > 0:
+    if time_left is None and pps_conf == Conf.high and pieces is not None and pps is not None and pps > 0:
         computed = 120.0 - pieces / pps
         if 0 < computed <= 120:
-            _set_result(result, "time_left", round(computed, 1), "medium")
+            _set_result(result, "time_left", round(computed, 1), Conf.medium)
 
     # Score / Inputs / Pieces — only when missing (not overriding OCR)
     if score is None and spp is not None and pieces is not None:
-        _set_result(result, "score", round(spp * pieces), "medium")
+        _set_result(result, "score", round(spp * pieces), Conf.medium)
     if pieces is None and pps is not None and time_left is not None:
         elapsed = 120.0 - time_left
         if elapsed > 0:
-            _set_result(result, "pieces_placed", round(pps * elapsed), "medium")
+            _set_result(result, "pieces_placed", round(pps * elapsed), Conf.medium)
     if inputs is None and kpp is not None and pieces is not None:
-        _set_result(result, "inputs", round(kpp * pieces), "medium")
+        _set_result(result, "inputs", round(kpp * pieces), Conf.medium)
 
 
 def _downgrade(stats: dict, field: str) -> None:
     entry = stats.get(field)
-    if entry and entry.get("conf") not in ("missing",):
-        entry["conf"] = "medium"
+    if entry and entry.get("conf") not in (Conf.missing,):
+        entry["conf"] = Conf.medium
 
 
 # ── Public API ────────────────────────────────────────────────────────────
 
 def is_available() -> bool:
-    return _TESSERACT_OK
+    _init_tesseract()
+    return bool(_TESSERACT_OK)
 
 
 def extract_stats(image_path: str | Path) -> dict[str, Any]:
     """Extract blitz stats from a screenshot.
 
     Returns dict with key "stats" mapping field -> {value, conf}.
-    conf is one of: "high", "medium", "missing"
+    conf is one of: Conf.high, Conf.medium, Conf.missing
     """
     _ensure_tesseract()
     img = Image.open(image_path)
@@ -970,7 +981,7 @@ def extract_stats(image_path: str | Path) -> dict[str, Any]:
     # ── ALL CLEARS → find value in region below/right of label ──
     if "all_clears" in others:
         val = _find_all_clears_value(img, lines, others["all_clears"], preprocessed=proc)
-        _set_result(result, "all_clears", val, "high" if val is not None else "missing")
+        _set_result(result, "all_clears", val, Conf.high if val is not None else Conf.missing)
 
     # ── PIECES → int value + PPS (may be on same or next line) ──
     if "pieces_placed" in others:
@@ -978,22 +989,22 @@ def extract_stats(image_path: str | Path) -> dict[str, Any]:
         val_line = _value_below(lines, anchor)
         if val_line:
             pieces_val, pps_val, _ = _parse_value_and_rate(val_line)
-            _set_result(result, "pieces_placed", pieces_val, "high" if pieces_val is not None else "missing")
+            _set_result(result, "pieces_placed", pieces_val, Conf.high if pieces_val is not None else Conf.missing)
             if pps_val is not None:
-                _set_result(result, "pps", pps_val, "high")
+                _set_result(result, "pps", pps_val, Conf.high)
             else:
                 # PPS might be on a line further down
                 next_line = _value_below(lines, val_line, max_dist=60)
                 if next_line:
                     _, pps2, _ = _parse_value_and_rate(next_line)
                     if pps2 is not None:
-                        _set_result(result, "pps", pps2, "high")
+                        _set_result(result, "pps", pps2, Conf.high)
                 if result["stats"].get("pps", {}).get("value") is None:
                     pps3 = _focused_rate_right(img, val_line, RE_PPS, 10)
                     if pps3 is not None:
-                        _set_result(result, "pps", pps3, "high")
+                        _set_result(result, "pps", pps3, Conf.high)
         else:
-            _set_result(result, "pieces_placed", None, "missing")
+            _set_result(result, "pieces_placed", None, Conf.missing)
 
     # ── INPUTS → int value + KPP ──
     if "inputs" in others:
@@ -1002,17 +1013,17 @@ def extract_stats(image_path: str | Path) -> dict[str, Any]:
         if val_line:
             inputs_val, _, kpp_val = _parse_value_and_rate(val_line)
             if kpp_val is not None:
-                _set_result(result, "kpp", kpp_val, "high")
+                _set_result(result, "kpp", kpp_val, Conf.high)
             else:
                 next_line = _value_below(lines, val_line, max_dist=60)
                 if next_line:
                     _, _, kpp2 = _parse_value_and_rate(next_line)
                     if kpp2 is not None:
-                        _set_result(result, "kpp", kpp2, "high")
+                        _set_result(result, "kpp", kpp2, Conf.high)
                 if result["stats"].get("kpp", {}).get("value") is None:
                     kpp3 = _focused_rate_right(img, val_line, RE_KPP, 15)
                     if kpp3 is not None:
-                        _set_result(result, "kpp", kpp3, "high")
+                        _set_result(result, "kpp", kpp3, Conf.high)
 
             # Recover a corrupted integer input count.  INPUTS must be at
             # least the number of PIECES (KPP is always >= 1), so a read
@@ -1030,9 +1041,9 @@ def extract_stats(image_path: str | Path) -> dict[str, Any]:
                 recovered = round(kpp_for_recovery * pieces_for_recovery)
                 if recovered > 0:
                     inputs_val = recovered
-            _set_result(result, "inputs", inputs_val, "high" if inputs_val is not None else "missing")
+            _set_result(result, "inputs", inputs_val, Conf.high if inputs_val is not None else Conf.missing)
         else:
-            _set_result(result, "inputs", None, "missing")
+            _set_result(result, "inputs", None, Conf.missing)
 
     # ── SCORE (bottom-right) + SPP ──
     if right_score_anchor:
@@ -1049,7 +1060,7 @@ def extract_stats(image_path: str | Path) -> dict[str, Any]:
                         if next_val is not None and next_val >= 1000:
                             score_val = next_val
                             val_line = next_line
-                _set_result(result, "score", score_val, "high" if score_val else "missing")
+                _set_result(result, "score", score_val, Conf.high if score_val else Conf.missing)
 
     # ── SCORE (left) ── fallback: use when right score is missing or suspicious (<1000)
     if left_score_anchor:
@@ -1059,7 +1070,7 @@ def extract_stats(image_path: str | Path) -> dict[str, Any]:
             if val_line:
                 score_val = _parse_number(val_line["text"])
                 if score_val is not None:
-                    _set_result(result, "score", score_val, "high")
+                    _set_result(result, "score", score_val, Conf.high)
 
             # SPP is on the same line: e.g. "22,403, 773/P"
             # Use high max_val since SPP can be hundreds or thousands
@@ -1073,7 +1084,7 @@ def extract_stats(image_path: str | Path) -> dict[str, Any]:
             if spp_val is None:
                 spp_val = _focused_rate_right(img, val_line, RE_SPP, 5000)
             if spp_val is not None:
-                _set_result(result, "spp", spp_val, "high")
+                _set_result(result, "spp", spp_val, Conf.high)
 
     # ── Timer ──
     raw_time_left = _parse_timer(lines, img_size[0], img_size[1])
@@ -1083,7 +1094,7 @@ def extract_stats(image_path: str | Path) -> dict[str, Any]:
             result["stats"].get("pieces_placed", {}).get("value"),
             result["stats"].get("pps", {}).get("value"),
         )
-        _set_result(result, "time_left", time_left, "high")
+        _set_result(result, "time_left", time_left, Conf.high)
     else:
         # Fallback: compute from pieces / PPS for faint timers
         pv = result["stats"].get("pieces_placed", {}).get("value")
@@ -1091,7 +1102,7 @@ def extract_stats(image_path: str | Path) -> dict[str, Any]:
         if pv is not None and pv_pps is not None and pv_pps > 0:
             computed = 120.0 - pv / pv_pps
             if 0 < computed <= 120:
-                _set_result(result, "time_left", round(computed, 1), "medium")
+                _set_result(result, "time_left", round(computed, 1), Conf.medium)
 
     # ── Cross-validation ──
     cross_validate(result)

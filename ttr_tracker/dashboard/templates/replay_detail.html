@@ -26,6 +26,8 @@
         .chart-container { position: relative; width: 100%; }
         a { color: #6c5ce7; text-decoration: none; }
         a:hover { text-decoration: underline; }
+        .btn-del { display:inline-block;background:#d63031;color:#fff;border:none;border-radius:4px;padding:0.4rem 1rem;font-size:0.8rem;cursor:pointer;font-weight:600;text-decoration:none; }
+        .btn-del:hover { background:#b71c1c; }
         .hero-stat { font-size: 2.2rem; font-weight: 700; color: #00b894; text-align: center; padding: 0.5rem 0; }
         .hero-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.5px; color: #888; text-align: center; }
     </style>
@@ -55,6 +57,21 @@ async function initGM() {
 function fmt(secs) { const m = Math.floor(secs / 60); const s = (secs % 60).toFixed(2); return m > 0 ? `${m}:${s.padStart(5,'0')}` : `${s}s`; }
 initGM();
 
+async function deleteReplay() {
+    if (!confirm('Delete this replay permanently?')) return;
+    try {
+        const r = await fetch('/api/replays/' + replay.id, { method: 'DELETE' });
+        const result = await r.json();
+        if (result.status === 'deleted') {
+            window.location.href = '/replays';
+        } else {
+            alert('Delete failed: ' + (result.error || 'unknown'));
+        }
+    } catch (e) {
+        alert('Delete failed: ' + e.message);
+    }
+}
+
 const replay = /*{{REPLAY_DATA}}*/;
 const s = replay.stats;
 const gamemode = replay.gamemode;
@@ -63,7 +80,10 @@ const time = (s.final_time || 0) / 1000;
 const perfectPct = s.pieces_placed ? ((s.finesse_perfect_pieces || 0) / s.pieces_placed * 100).toFixed(0) : '—';
 
 document.getElementById('app').innerHTML = `
-    <a href="/replays" style="color:#888;font-size:0.85rem;">&larr; Back to replays</a>
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+        <a href="/replays" style="color:#888;font-size:0.85rem;">&larr; Back to replays</a>
+        <button class="btn-del" onclick="deleteReplay()">Delete</button>
+    </div>
     <h1 style="margin:0.75rem 0;font-size:1.3rem;">Replay Detail <span class="badge" style="font-size:0.7rem;background:#2a2a35;padding:0.2rem 0.5rem;border-radius:4px;">${gamemode}</span></h1>
 
     ${is40l ? `

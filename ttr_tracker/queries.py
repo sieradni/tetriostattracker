@@ -24,23 +24,26 @@ def get_summary(db: Database, gamemode: str = "blitz") -> dict:
     }
 
 
-def _combined_recent_entries(db: Database, gamemode: str, limit: int) -> list[dict]:
+def _combined_recent_entries(db: Database, gamemode: str, limit: Optional[int] = 20) -> list[dict]:
     with db.session() as sess:
         replay_q = (
             sess.query(ReplayRow, StatsRow)
             .outerjoin(StatsRow, ReplayRow.id == StatsRow.replay_id)
             .filter(ReplayRow.gamemode == gamemode)
             .order_by(ReplayRow.timestamp.desc())
-            .limit(limit)
-            .all()
         )
+        if limit:
+            replay_q = replay_q.limit(limit)
+        replay_q = replay_q.all()
+
         partial_q = (
             sess.query(PartialRunRow)
             .filter(PartialRunRow.gamemode == gamemode)
             .order_by(PartialRunRow.timestamp.desc())
-            .limit(limit)
-            .all()
         )
+        if limit:
+            partial_q = partial_q.limit(limit)
+        partial_q = partial_q.all()
 
     entries = []
     for rp, st in replay_q:
@@ -116,18 +119,25 @@ def _compute_averages(entries: list[dict]) -> dict:
 
 
 def get_trends(db: Database, gamemode: str = "blitz") -> dict[str, list[tuple[str, float]]]:
-    columns = ["score", "lines", "apm", "pps", "level", "tspins", "finesse_faults", "kpp", "kps", "quads", "all_clears"]
-    result = {}
+    columns = [
+        "score", "lines", "apm", "pps", "level", "tspins", "finesse_faults",
+        "kpp", "kps", "quads", "all_clears", "final_time", "pieces_placed",
+    ]
+    raw = db.get_trend_data_multi(gamemode, columns)
+    result: dict[str, list[tuple[str, float]]] = {}
     for col in columns:
-        raw = db.get_trend_data(gamemode, col)
-        result[col] = [(ts.isoformat(), val) for ts, val in raw]
-    time_raw = db.get_trend_data(gamemode, "final_time")
-    result["time"] = [(ts.isoformat(), val / 1000) for ts, val in time_raw if val]
+        pairs = raw.get(col, [])
+        if col == "final_time":
+            result["time"] = [(ts.isoformat(), val / 1000) for ts, val in pairs if val]
+        else:
+            result[col] = [(ts.isoformat(), val) for ts, val in pairs]
 
-    pieces_raw = db.get_trend_data(gamemode, "pieces_placed")
+    # score_per_piece is derived from the same batched data
+    score_pairs = raw.get("score", [])
+    pieces_pairs = raw.get("pieces_placed", [])
     result["score_per_piece"] = [
-        (ts, s / max(p, 1))
-        for (ts, s), (_, p) in zip(result["score"], pieces_raw)
+        (ts.isoformat(), s / max(p, 1))
+        for (ts, s), (_, p) in zip(score_pairs, pieces_pairs)
     ]
 
     return result
@@ -161,7 +171,7 @@ def get_session_summaries(db: Database, gamemode: str = "blitz") -> list[dict]:
 
 
 def _combined_session_groups(db: Database, gamemode: str, gap_minutes: int = 60) -> list[list[dict]]:
-    entries = _combined_recent_entries(db, gamemode, 10000)
+    entries = _combined_recent_entries(db, gamemode, limit=None)
     entries.sort(key=lambda e: e["timestamp"])
     if not entries:
         return []
@@ -188,30 +198,28 @@ def _add_replay_pbs(db: Database, gamemode: str, result: dict) -> None:
         "kpp", "kps", "final_time",
     ]
     with db.session() as sess:
-        for col_name in pb_columns:
-            col = getattr(StatsRow, col_name, None)
-            if col is None:
-                continue
-            order = col.asc() if col_name == "final_time" else col.desc()
-            row = (
-                sess.query(col, ReplayRow.id, ReplayRow.timestamp)
-                .join(ReplayRow, ReplayRow.id == StatsRow.replay_id)
-                .filter(ReplayRow.gamemode == gamemode)
-                .order_by(order)
-                .first()
-            )
-            if row and row[0] is not None:
+        rows = (
+            sess.query(StatsRow, ReplayRow.id, ReplayRow.timestamp)
+            .join(ReplayRow, ReplayRow.id == StatsRow.replay_id)
+            .filter(ReplayRow.gamemode == gamemode)
+            .all()
+        )
+        for st, rid, ts in rows:
+            for col_name in pb_columns:
+                val = getattr(st, col_name, None)
+                if val is None:
+                    continue
                 existing = result.get(col_name)
                 if col_name == "final_time":
-                    if existing is None or row[0] < existing[0]:
-                        result[col_name] = (float(row[0]), row[1], row[2])
+                    if existing is None or val < existing[0]:
+                        result[col_name] = (float(val), rid, ts)
                 else:
-                    if existing is None or row[0] > existing[0]:
-                        result[col_name] = (float(row[0]), row[1], row[2])
+                    if existing is None or val > existing[0]:
+                        result[col_name] = (float(val), rid, ts)
 
 
 def _add_partial_pbs(db: Database, gamemode: str, result: dict) -> None:
-    partials = db.get_all_partial_runs(gamemode=gamemode, limit=10000)
+    partials = db.get_all_partial_runs(gamemode=gamemode, limit=None)
     for pr in partials:
         _check_pb(result, "score", float(pr.score), f"partial-{pr.id}", pr.timestamp, higher=True)
         _check_pb(result, "pps", float(pr.pps), f"partial-{pr.id}", pr.timestamp, higher=True)

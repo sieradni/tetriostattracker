@@ -1,10 +1,18 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from ttr_tracker.database import Database
-from ttr_tracker.parser import parse_ttr, parse_ttrm
+from ttr_tracker.parser import ParseError, parse_ttr, parse_ttrm
+from ttr_tracker.stats import compute_kpp, compute_kps
 
 
 def import_file(db: Database, path: str | Path) -> str:
+    try:
+        return _import_file_unchecked(db, path)
+    except ParseError as e:
+        return f"Error: {e}"
+
+
+def _import_file_unchecked(db: Database, path: str | Path) -> str:
     p = Path(path)
     if p.suffix == ".ttrm":
         return import_ttrm_file(db, p)
@@ -56,8 +64,8 @@ def import_file(db: Database, path: str | Path) -> str:
         finesse_perfect_pieces=s.finesse.perfectpieces,
         garbage_sent=s.garbage.sent,
         garbage_received=s.garbage.received,
-        kpp=s.inputs / s.piecesplaced if s.piecesplaced else 0,
-        kps=s.inputs / (s.finaltime / 1000) if s.finaltime else 0,
+        kpp=compute_kpp(s.inputs, s.piecesplaced),
+        kps=compute_kps(s.inputs, s.finaltime / 1000) if s.finaltime else 0,
         final_time=s.finaltime,
         gameover_reason=ttr.replay.results.gameoverreason,
     )
@@ -84,7 +92,7 @@ def import_ttrm_file(db: Database, path: str | Path) -> str:
         return f"Skipped {Path(path).name} (already imported)"
 
     ts_str = data.get("ts")
-    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")) if ts_str else datetime.now()
+    ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")) if ts_str else datetime.now(timezone.utc)
 
     lb = data.get("leaderboard", [])
     p1 = lb[0] if len(lb) > 0 else {}
@@ -93,9 +101,9 @@ def import_ttrm_file(db: Database, path: str | Path) -> str:
     db.insert_match(
         match_id=match_id,
         timestamp=ts,
-        player1_id=p1.get("player_id", ""),
+        player1_id=p1.get("player_id"),
         player1_name=p1.get("player_name", ""),
-        player2_id=p2.get("player_id", ""),
+        player2_id=p2.get("player_id"),
         player2_name=p2.get("player_name", ""),
         player1_wins=p1.get("wins", 0),
         player2_wins=p2.get("wins", 0),
@@ -126,5 +134,8 @@ def import_directory(db: Database, directory: str | Path) -> list[str]:
     results = []
     for fpath in sorted(Path(directory).iterdir()):
         if fpath.suffix in (".ttr", ".ttrm"):
-            results.append(import_file(db, fpath))
+            try:
+                results.append(import_file(db, fpath))
+            except Exception as e:
+                results.append(f"Error importing {fpath.name}: {e}")
     return results
